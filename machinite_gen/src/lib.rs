@@ -219,7 +219,7 @@ mod tests {
                     }
 
                     impl Loop0 {
-                        pub fn plot_start(self) -> MachinePoll<Accumulator> {
+                        pub fn plot(self) -> MachinePoll<Accumulator> {
                             MachinePoll::Yield(Accumulator::Yield0(Yield0 { loop0: self }, ()))
                         }
                     }
@@ -241,7 +241,7 @@ mod tests {
                                 Err(e) => return MachinePoll::End(Err(e)),
                             };
 
-                            Loop0 { balances }.plot_start()
+                            Loop0 { balances }.plot()
                         }
                     }
                 }
@@ -268,7 +268,7 @@ mod tests {
                 };
 
                 let result: <Accumulator as Machine>::Out =
-                    yield (save! { snapshot: Option<SnapshotMeta> }, Accumulator { balances } as Accumulator);
+                    yield (save! { snapshot: Option<SnapshotMeta> }, (Accumulator { balances }, range) as (Accumulator, GetBlocks));
 
                 let result = match result {
                     Err(e) => Err(e),
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn insert_block_at() {
         let input: ItemFn = parse_quote!(
-            fn insert_at(
+            fn insert_block_at(
                 block: Block,
                 now: Timestamp,
                 step_size: usize,
@@ -384,7 +384,7 @@ mod tests {
         assert_eq!(
             output.to_string(),
             quote! {
-                pub enum InsertAt {
+                pub enum InsertBlockAt {
                     Yield0(insert_at::Yield0, ()),
                     Yield1(insert_at::Yield1, GetBalanceAt),
                     Yield2(
@@ -405,7 +405,7 @@ mod tests {
                     }
 
                     impl Yield0 {
-                        pub fn plot(self, _: ()) -> MachinePoll<InsertAt> {
+                        pub fn plot(self, _: ()) -> MachinePoll<InsertBlockAt> {
                             let Self { block, now, step_size } = self;
 
                             MachinePoll::Yield(InsertAt::Yield1(
@@ -426,7 +426,7 @@ mod tests {
                     }
 
                     impl Yield1 {
-                        pub fn plot(self, result: <GetBalanceAt as Machine>::Out) -> MachinePoll<InsertAt> {
+                        pub fn plot(self, result: <GetBalanceAt as Machine>::Out) -> MachinePoll<InsertBlockAt> {
                             let Self { block, now, step_size } = self;
 
                             let (balances, blocks_count) = match result {
@@ -452,7 +452,7 @@ mod tests {
                     pub struct Yield2 {}
 
                     impl Yield2 {
-                        pub fn plot(self, result: Result<(), BlockError>) -> MachinePoll<InsertAt> {
+                        pub fn plot(self, result: Result<(), BlockError>) -> MachinePoll<InsertBlockAt> {
                             let Self {} = self;
 
                             MachinePoll::End(result)
@@ -534,7 +534,7 @@ mod tests {
                             let acc = Accumulator::new(balances);
                             let mut i = 0;
 
-                            Loop0 { acc, step_size, i }.plot_start()
+                            Loop0 { acc, step_size, i }.plot()
                         }
                     }
 
@@ -545,7 +545,7 @@ mod tests {
                     }
 
                     impl Loop0 {
-                        pub fn plot_start(self) -> MachinePoll<BlocksRebuilder> {
+                        pub fn plot(self) -> MachinePoll<BlocksRebuilder> {
                             let Self { acc, step_size, i } = self;
 
                             MachinePoll::Yield(BlocksRebuilder::Yield1(
@@ -593,7 +593,7 @@ mod tests {
                                 ));
                             } 
 
-                            Loop0 { acc, step_size, i }.plot_start()
+                            Loop0 { acc, step_size, i }.plot()
                         }
                     }
 
@@ -608,7 +608,7 @@ mod tests {
                             let acc = Accumulator::new(balances);
                             let i = 0;
 
-                            Loop0 { acc, step_size, i }.plot_start()
+                            Loop0 { acc, step_size, i }.plot()
                         }
                     }
                 }

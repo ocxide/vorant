@@ -1,42 +1,45 @@
 # Plan for Completing Machinite Proc-Macro Implementation
 
 ## Overview
-This proc-macro transforms async-like functions with yield points into state machine enums. The macro parses functions containing `let var: Type = yield (save! { fields }, expr)` statements and generates:
+This proc-macro transforms async-like functions with yield points into state machine enums. The macro parses functions containing `let var: Type = yield (save! { fields: ty }, expr as ty)` statements and generates:
 - An enum representing machine states
 - Structs for each yield point containing saved state
-- Implementation of the `Machine` trait with `create` and `plot` methods
+- Implementation of the `Machine` trait with `Out` type associated
 
 ## Current Status
-- ✅ Parsing logic for yield points exists in `yield_points` module
-- ❌ Main `machine_fn::machine` function is unimplemented (todo!())
-- ❌ Tests are failing due to missing implementation
+- x Parsing logic for yield points exists in `yield_points` module, but it is incomplete as only parses top level yields
+- x Main `machine_fn::machine` function is unimplemented (todo!())
+- x Tests are failing due to missing implementation
 - ✅ Test cases provide clear expected outputs
 
-## Implementation Steps
+## Implementation Requirements
 
 ### 1. Function Analysis and Yield Point Extraction
 - Parse the input `ItemFn` to extract function signature and body
 - Iterate through all statements in the function body
-- Use `yield_points::parse_stmt` to identify and parse yield points
+- Identify top level and nested yields
 - Collect all yield points with their positions and associated data
 
 ### 2. State Machine Structure Design
 - Generate enum name from the attribute token stream (e.g., `Accumulator`, `GetBalancesAt`)
 - Create enum variants for each yield point (Yield0, Yield1, etc.)
-- Each variant contains the corresponding yield struct and the yield expression type
+- A yield point consists of the following:
+  - State saved: private set of fields representing the current state of the machine
+  - Yielded data: data returned to the caller
+- The `Yield0` variant, being the initial state, contains the data passed from args as inner state, but no yielded data (being `()`).
+- Each next variant contains the corresponding yield struct and the yield expression type
 
 ### 3. Yield Point Struct Generation
 - For each yield point, create a struct containing:
-  - Fields specified in the `save!` macro
-  - Proper visibility and types
-- Generate unique names for each yield struct (Yield0, Yield1, etc.)
+  - Fields specified in the `save!` macro (Being a punctuated list of `ident: ty` pairs)
+  - The visibility of the struct should be `pub` while its fields should be `pub(self)` (a.k.a. private)
+- Generate unique names for each yield struct based on the position (Yield0, Yield1, etc.)
 
 ### 4. Machine Trait Implementation
 - Implement `Machine` trait for the generated enum:
   - `type Out = <function return type>`
-  - `fn create(params) -> MachinePoll<Self>`
 - Generate `plot` methods for each yield struct that:
-  - Take the yielded value as parameter
+  - Take the resumed arg value as parameter
   - Execute the code between yield points
   - Return next state or final result
 
@@ -44,51 +47,74 @@ This proc-macro transforms async-like functions with yield points into state mac
 - Handle function body transformation:
   - Split function body at yield points
   - Generate state transitions between yield points
-  - Preserve control flow (loops, conditionals, etc.)
+  - Emulate control flow between yield points (loops, conditionals, etc.) transforming into state transitions (only for control flow that contains yield points).
 - Handle variable scoping and state persistence
-- Generate proper error handling and return types
+- Transform returns to return proper value expected by the machine `$MachineEnum::End($result)`
 
-### 6. Complex Cases Handling
-- Nested yields and state machines
-- Loops containing yield points
-- Conditional yields
-- Early returns and error propagation
+### 6. Loops and conditionals
+- Normal loops and conditionals that contain yields are not supported as it, instead, they require to create a pseudo yield point to make transformation possible.
+- The only way to do a loop is to create a `while save! { field1: Type1 } { /* loop body */ }` pseudo yield point.
 
-## Test Cases Analysis
+#### While Loop
+The only valid way to create loops that contain yields is the following:
 
-### accumulator
-- Single yield point in a loop
-- Simple state: balances
-- Returns Result type
+```rust
+while save! { field1: Type1 } {
+    /* line 1 body */ 
+    let line2: Type2 = yield (save! { field1: Type1 }, field1 as Type1);
 
-### get_balances_at
-- Two yield points
-- First yield saves `now`, yields `now as Timestamp`
-- Second yield saves `snapshot`, yields `Accumulator { balances }`
-- Complex state transitions
+    /* line 3 body */
+}
+```
 
-### insert_block_at
-- Three yield points
-- Multiple parameters and complex logic
-- Nested machine calls
+That gets transformed into:
 
-### blocks_rebuilder
-- Loop with conditional yields
-- State reset and continuation logic
-- Snapshot creation and state rebuilding
+```rust
+pub struct Loop0 {
+    field1: Type1,
+}
 
-## Implementation Challenges
-1. **Control Flow Analysis**: Properly handling loops, conditionals, and early returns around yield points
-2. **Variable Scoping**: Ensuring variables are properly captured and restored across yields
-3. **Type Inference**: Correctly determining types for yield expressions and state structs
-4. **Error Handling**: Propagating errors through state transitions
-5. **Code Generation**: Producing syntactically correct and semantically equivalent Rust code
+impl Loop0 {
+    pub fn plot(self) -> MachinePoll<MyMachine> {
+        let Self { field1 } = self;
+        /* line 1 body */ 
+        MachinePoll::Yield(MyMachine::Yield1(Yield1 { field1 }, field1 as Type1))
+    }
+}
+```
 
-## Next Steps
-1. Implement basic yield point extraction and enum generation
-2. Add struct generation for saved state
-3. Implement simple Machine trait (single yield case)
-4. Handle multiple yields and state transitions
-5. Add support for loops and complex control flow
-6. Run tests and fix any compilation issues
-7. Optimize generated code for readability and performance
+While this loop looks like a yield point, it does not receive a resume argument and its usage is only internal to the machine.
+For the same reason, it is not part of the machine as a member.
+
+##### Reruring the loop
+
+Any statement that attempts to rerun the loop by using `continue` or just letting the conditions pass should use the `Loop0` pseudo yield point to create a new loop iteration.
+
+```rust
+impl Yield1 {
+    pub fn plot(self) -> MachinePoll<MyMachine> {
+        let Self { field1 } = self;
+
+        /* line 3 body */
+
+        Loop0 { field1 }.plot()
+    }
+}
+
+#### Ifs
+The only valid if statements that contain yields are the following:
+
+```rust
+if /* condition */ {
+    /* line 1 body */ 
+    let line2: Type2 = yield (save! { field1: Type1 }, field1 as Type1);
+    return; // or continue or break
+}
+```
+
+A `return`/`continue`/`break` statement is required as the last line of the if statement. If it is not present, the macro should not work.
+
+## Implementation Tasks
+1. [ ] Implement parsing and expansion for simple machines with no conditionals or loops: focus on insert_block_at test case until completed 
+2. [ ] Implement parsing and expansion for machines with loops
+3. [ ] Implement parsing and expansion for machines with conditionals within loops
