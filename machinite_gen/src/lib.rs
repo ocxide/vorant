@@ -184,15 +184,15 @@ mod tests {
     fn accumulator() {
         let input: ItemFn = parse_quote!(
             fn accumulator(balances: BalanceSet) -> Result<BalanceSet, BlockError> {
-                loop {
-                    let next: Option<Block> = yield (save! { balances: BalanceSet }, () as ());
+                while save! { balances: BalanceSet } {
+                    let next: Option<Block> = yield (save! { mut balances: BalanceSet }, () as ());
 
                     let Some(block) = next else {
                         return Ok(balances);
                     };
 
-                    let balances = match balances.apply_many(block.operations.into_iter()) {
-                        Ok(balances) => balances,
+                    balances = match balances.apply_many(block.operations.into_iter()) {
+                        Ok(balances_) => balances_,
                         Err(e) => return Err(e),
                     };
                 }
@@ -214,13 +214,23 @@ mod tests {
                 }
 
                 mod accumulator {
+                    pub struct Loop0 {
+                        balances: BalanceSet,
+                    }
+
+                    impl Loop0 {
+                        pub fn plot_start(self) -> MachinePoll<Accumulator> {
+                            MachinePoll::Yield(Accumulator::Yield0(Yield0 { loop0: self }, ()))
+                        }
+                    }
+
                     pub struct Yield0 {
-                        balances: BalanceSet
+                        balances: BalanceSet,
                     }
 
                     impl Yield0 {
                         pub fn plot(self, next: Option<Block>) -> MachinePoll<Accumulator> {
-                            let Self { balances } = self;
+                            let Self { mut balances } = self;
 
                             let Some(block) = next else {
                                 return MachinePoll::End(Ok(balances));
@@ -231,7 +241,7 @@ mod tests {
                                 Err(e) => return MachinePoll::End(Err(e)),
                             };
 
-                            MachinePoll::Yield(Accumulator::Yield0(Yield0 { balances }, ()))
+                            Loop0 { balances }.plot_start()
                         }
                     }
                 }
@@ -460,8 +470,8 @@ mod tests {
                 let acc = Accumulator::new(balances);
                 let mut i = 0;
 
-                loop {
-                    let next: Option<(BlockId, Block)> = yield (save! { acc: Accumulator, step_size: usize, i: usize }, () as ());
+                while save! { acc: Accumulator, step_size: usize, i: usize } {
+                    let next: Option<(BlockId, Block)> = yield (save! { mut acc: Accumulator, step_size: usize, mut i: usize }, () as ());
 
                     let Some((id, block)) = next else {
                         return Ok(());
@@ -469,7 +479,7 @@ mod tests {
 
                     let Accumulator::Yield0(acc) = acc;
 
-                    let acc = match acc.plot(Some(block)) {
+                    acc = match acc.plot(Some(block)) {
                         MachinePoll::End(out) => return out.map(|_| ()),
                         MachinePoll::Yield(acc) => acc,
                     };
@@ -489,7 +499,6 @@ mod tests {
 
                         let i = 0;
                         let acc = Accumulator::new(balances);
-
                         continue;
                     }
                 }
@@ -525,8 +534,22 @@ mod tests {
                             let acc = Accumulator::new(balances);
                             let mut i = 0;
 
+                            Loop0 { acc, step_size, i }.plot_start()
+                        }
+                    }
+
+                    pub struct Loop0 {
+                        acc: Accumulator,
+                        step_size: usize,
+                        i: usize,
+                    }
+
+                    impl Loop0 {
+                        pub fn plot_start(self) -> MachinePoll<BlocksRebuilder> {
+                            let Self { acc, step_size, i } = self;
+
                             MachinePoll::Yield(BlocksRebuilder::Yield1(
-                                Yield1 { acc, step_size, i },
+                                Yield1 { acc, step_size, i }, 
                                 (),
                             ))
                         }
@@ -540,7 +563,7 @@ mod tests {
 
                     impl Yield1 {
                         pub fn plot(self, next: Option<(BlockId, Block)>) -> MachinePoll<BlocksRebuilder> {
-                            let Self { acc, step_size, mut i } = self;
+                            let Self { mut acc, step_size, mut i } = self;
 
                             let Some((id, block)) = next else {
                                 return MachinePoll::End(Ok(()));
@@ -548,7 +571,7 @@ mod tests {
 
                             let Accumulator::Yield0(acc) = acc;
 
-                            let acc = match acc.plot(Some(block)) {
+                            acc = match acc.plot(Some(block)) {
                                 MachinePoll::End(out) => return MachinePoll::End(out.map(|_| ())),
                                 MachinePoll::Yield(acc) => acc,
                             };
@@ -565,15 +588,12 @@ mod tests {
                                 };
 
                                 return MachinePoll::Yield(BlocksRebuilder::Yield2(
-                                    Yield2 { step_size },
+                                    Yield2 {},
                                     snapshot
                                 ));
                             } 
 
-                            MachinePoll::Yield(BlocksRebuilder::Yield1(
-                                Yield1 { acc, step_size, i },
-                                (),
-                            ))
+                            Loop0 { acc, step_size, i }.plot_start()
                         }
                     }
 
@@ -586,12 +606,9 @@ mod tests {
                             let Self { step_size } = self;
 
                             let acc = Accumulator::new(balances);
-                            let mut i = 0;
+                            let i = 0;
 
-                            MachinePoll::Yield(BlocksRebuilder::Yield1(
-                                Yield1 { acc, step_size, i }, 
-                                (),
-                            ))
+                            Loop0 { acc, step_size, i }.plot_start()
                         }
                     }
                 }
