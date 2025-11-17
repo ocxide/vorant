@@ -18,45 +18,12 @@ pub fn machine(_attr: TokenStream, item: TokenStream) -> TokenStream {
     todo!()
 }
 
-mod a {
-    use quote::{format_ident, quote};
-    use syn::Ident;
+mod machine_fn {
+    use proc_macro2::TokenStream;
+    use syn::ItemFn;
 
-    use crate::yield_points::YieldPoint;
-
-    struct Machine {
-        pub vis: syn::Visibility,
-        pub points: Vec<YieldPoint>,
-    }
-
-    impl Machine {
-        pub fn expand(&self) -> proc_macro2::TokenStream {
-            let _ = self.points.iter().enumerate().map(|(i, point)| {
-                let ident = format_ident!("Yield{i}");
-                let fields = point.expr.0.items.iter().map(|item| {
-                    let ident = &item.ident;
-                    let ty = &item.ty;
-
-                    quote! {
-                        #ident: #ty
-                    }
-                });
-
-                quote! {
-                    pub struct #ident {
-                        #(#fields,)*
-                    }
-                }
-            });
-
-            quote! {
-                pub enum Machine {
-                }
-
-                mod machine {
-                }
-            }
-        }
+    pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::Error> {
+        todo!()
     }
 }
 
@@ -203,9 +170,444 @@ mod yield_points {
     }
 }
 
-// #[machine]
-// fn a() {
-//     let bar = 32;
-//
-//     let foo: u32 = yield (save! { bar }, 2 as u32);
-// }
+#[cfg(test)]
+mod tests {
+    use proc_macro2::TokenStream;
+    use quote::quote;
+    use syn::{ItemFn, parse_quote};
+
+    #[test]
+    fn accumulator() {
+        let input: ItemFn = parse_quote!(
+            fn accumulator(balances: BalanceSet) -> Result<BalanceSet, BlockError> {
+                loop {
+                    let next: Option<Block> = yield (save! { balances }, ());
+
+                    let Some(block) = next else {
+                        return Ok(balances);
+                    };
+
+                    let balances = match balances.apply_many(block.operations.into_iter()) {
+                        Ok(balances) => balances,
+                        Err(e) => return Err(e),
+                    };
+                }
+            }
+        );
+        let attr: TokenStream = syn::parse_quote!(Accumulator);
+
+        let output = super::machine_fn::machine(attr, input).unwrap();
+
+        assert_eq!(
+            output.to_string(),
+            quote! {
+                pub enum Accumulator {
+                    Yield0(accumulator::Yield0, ())
+                }
+
+                impl machinite::Machine for Accumulator {
+                    type Out = Result<BalanceSet, BlockError>;
+
+                    fn create(balances: BalanceSet) -> MachinePoll<Accumulator> {
+                        MachinePoll::Yield(Acummulator::Yield0(accumulator::Yield0 { balances }, ()))
+                    }
+                }
+
+                mod accumulator {
+                    pub struct Yield0 {
+                        balances: BalanceSet
+                    }
+
+                    impl Yield0 {
+                        pub fn plot(self, next: Option<Block>) -> MachinePoll<Accumulator> {
+                            let Self { balances } = self;
+
+                            let Some(block) = next else {
+                                return MachinePoll::End(Ok(balances));
+                            };
+
+                            let balances = match self.balances.apply_many(block.operations.into_iter()) {
+                                Ok(balances) => balances,
+                                Err(e) => return MachinePoll::End(Err(e)),
+                            };
+
+                            MachinePoll::Yield(Accumulator::Yield0(Yield0 { balances }, ()))
+                        }
+                    }
+                }
+            }.to_string()
+        );
+    }
+
+    #[test]
+    fn get_balances_at() {
+        let input: ItemFn = parse_quote!(
+            fn get_balance_at(
+                now: Timestamp,
+            ) -> Result<(BalanceSet, Option<SnapshotMeta>), BlockError> {
+                let last: Option<(BalanceSet, SnapshotMeta, BlockMeta)> =
+                    yield (save! { now }, now as Timestamp);
+
+                let (balances, snapshot, range) = match last {
+                    Some((balances, snapshot, block_meta)) => (
+                        balances,
+                        Some(snapshot),
+                        GetBlocks::Between(block_meta.at..=now),
+                    ),
+                    None => (BalanceSet::default(), None, GetBlocks::Until(..=now)),
+                };
+
+                let result: <Accumulator as Machine>::Out =
+                    yield (save! { snapshot }, Accumulator { balances });
+
+                let result = match result {
+                    Err(e) => Err(e),
+                    Ok(balances) => Ok((balances, snapshot)),
+                };
+
+                result
+            }
+        );
+        let attr: TokenStream = syn::parse_quote!(GetBalancesAt);
+
+        let output = super::machine_fn::machine(attr, input).unwrap();
+
+        assert_eq!(
+            output.to_string(),
+            quote! {
+                pub enum GetBalanceAt {
+                    Yield0(get_balance_at::Yield0, ()),
+                    Yield1(get_balance_at::Yield1, (Accumulator, GetBlocks)),
+                }
+
+                mod get_balance_at {
+                    impl Machine for GetBalanceAt {
+                        type Out = Result<(BalanceSet, Option<SnapshotMeta>), BlockError>;
+
+                        fn create(now: Timestamp) -> MachinePoll<GetBalanceAt> {
+                            MachinePoll::Yield(GetBalanceAt::Yield0(Yield0 { now }, ()))
+                        }
+                    }
+
+                    pub struct Yield0 {
+                        now: Timestamp,
+                    }
+
+                    impl Yield0 {
+                        pub fn plot(
+                            self,
+                            last: Option<(BalanceSet, SnapshotMeta, BlockMeta)>,
+                        ) -> MachinePoll<GetBalanceAt> {
+                            let Self { now } = self;
+
+                            let (balances, snapshot, range) = match last {
+                                Some((balances, snapshot, block_meta)) => (
+                                    balances,
+                                    Some(snapshot),
+                                    GetBlocks::Between(block_meta.at..=now),
+                                ),
+                                None => (BalanceSet::default(), None, GetBlocks::Until(..=now)),
+                            };
+
+                            MachinePoll::Yield(GetBalanceAt::IntoAcummulator(
+                                Yield1 { snapshot },
+                                (Accumulator { balances }, range),
+                            ))
+                        }
+                    }
+
+                    pub struct Yield1 {
+                        snapshot: Option<SnapshotMeta>,
+                    }
+
+                    impl Yield1 {
+                        pub fn plot(self, result: Result<BalanceSet, BlockError>) -> MachinePoll<GetBalanceAt> {
+                            let Self { snapshot } = self;
+
+                            let result = match result {
+                                Err(e) => Err(e),
+                                Ok(balances) => Ok((balances, snapshot)),
+                            };
+
+                            MachinePoll::End(result)
+                        }
+                    }
+                }
+            }.to_string()
+        );
+    }
+
+    #[test]
+    fn insert_block_at() {
+        let input: ItemFn = parse_quote!(
+            fn insert_at(
+                block: crate::Block,
+                now: Timestamp,
+                step_size: usize,
+            ) -> Result<(), BlockError> {
+                let out: <GetBalanceAt as Machine>::Out =
+                    yield (save! { block, now, step_size }, GetBalanceAt::new(now));
+
+                let (balances, blocks_count) = match result {
+                    Ok((balances, blocks_count)) => (balances, blocks_count),
+                    Err(e) => return Err(e),
+                };
+
+                let balances = match balances.apply_many(block.into_iter()) {
+                    Ok(balances) => balances,
+                    Err(e) => return Err(e),
+                };
+
+                let result: Result<BalanceSet, BlockError> = yield (
+                    save! {},
+                    (
+                        BlocksRebuilder::new(balances, step_size, blocks_count.unwrap_or(0)),
+                        now..,
+                    ),
+                );
+
+                let _ = result?;
+
+                Ok(())
+            }
+        );
+        let attr: TokenStream = syn::parse_quote!(InsertBlockAt);
+
+        let output = super::machine_fn::machine(attr, input).unwrap();
+
+        assert_eq!(
+            output.to_string(),
+            quote! {
+                pub enum InsertAt {
+                    Yield0(insert_at::Yield0, ()),
+                    Yield1(insert_at::Yield1, GetBalanceAt),
+                    Yield2(
+                        insert_at::Yield2,
+                        (BlocksRebuilder, RangeFrom<Timestamp>),
+                    ),
+                }
+
+                mod insert_block_at {
+                    impl Machine for InsertBlockAt {
+                        type Out = Result<(), BlockError>;
+
+                        fn create(block: crate::Block, now: Timestamp, step_size: usize) -> MachinePoll<InsertBlockAt> {
+                            MachinePoll::Yield(InsertBlockAt::Yield0(Yield0 { block, now, step_size }, ()))
+                        }
+                    }
+
+                    pub struct Yield0 {
+                        block: Vec<Operation>,
+                        now: Timestamp,
+                        step_size: usize,
+                    }
+
+                    impl Yield0 {
+                        pub fn plot(self, _: ()) -> MachinePoll<InsertAt> {
+                            let Self { block, now, step_size } = self;
+
+                            MachinePoll::Yield(InsertAt::Yield1(
+                                Yield1 {
+                                    block,
+                                    now,
+                                    step_size,
+                                },
+                                GetBalanceAt::new(now),
+                            ))
+                        }
+                    }
+
+                    pub struct Yield1 {
+                        block: Vec<Operation>,
+                        now: Timestamp,
+                        step_size: usize,
+                    }
+
+                    impl Yield1 {
+                        pub fn plot(self, result: <GetBalanceAt as Machine>::Out) -> MachinePoll<InsertAt> {
+                            let Self { block, now, step_size } = self;
+
+                            let (balances, blocks_count) = match result {
+                                Ok((balances, blocks_count)) => (balances, blocks_count),
+                                Err(e) => return MachinePoll::End(Err(e)),
+                            };
+
+                            let balances = match balances.apply_many(block.into_iter()) {
+                                Ok(balances) => balances,
+                                Err(e) => return MachinePoll::End(Err(e)),
+                            };
+
+                            MachinePoll::Yield(InsertAt::ValidateFuture(
+                                FutureRebuilded {},
+                                (
+                                    BlocksRebuilder::new(balances, step_size, blocks_count.unwrap_or(0)),
+                                    now..,
+                                ),
+                            ))
+                        }
+                    }
+
+                    pub struct Yield2 {}
+
+                    impl Yield2 {
+                        pub fn plot(self, result: Result<(), BlockError>) -> MachinePoll<InsertAt> {
+                            let Self {} = self;
+
+                            MachinePoll::End(result)
+                        }
+                    }
+                }
+            }.to_string()
+        );
+    }
+
+    #[test]
+    fn blocks_rebuilder() {
+        let input: ItemFn = parse_quote!(
+            fn blocks_rebuilder(balances: BalanceSet, step_size: usize) -> Result<(), BlockError> {
+                let acc = Accumulator::create(balances);
+                let mut i = 0;
+
+                loop {
+                    let next: Option<(BlockId, Block)> = yield (save! { acc, step_size, i }, ());
+
+                    let Some((id, block)) = next else {
+                        return Ok(());
+                    };
+
+                    let Accumulator::Yield0(acc) = acc;
+
+                    let acc = match acc.plot(Some(block)) {
+                        MachinePoll::End(out) => return out.map(|_| ()),
+                        MachinePoll::Yield(acc) => acc,
+                    };
+
+                    i += 1;
+
+                    if i >= step_size {
+                        total_blocks += i;
+
+                        let snapshot = Snapshot {
+                            balances: acc.balances,
+                            blocks_count: total_blocks,
+                            at_block_id: id,
+                        };
+
+                        let balances: BalanceSet = yield (save! { step_size }, snapshot);
+
+                        let i = 0;
+                        let acc = Accumulator::create(balances);
+
+                        continue;
+                    }
+                }
+            }
+        );
+        let attr: TokenStream = syn::parse_quote!(GetBalancesAt);
+
+        let output = super::machine_fn::machine(attr, input).unwrap();
+
+        assert_eq!(
+            output.to_string(),
+            quote! {
+                pub enum BlocksRebuilder {
+                    Yield0(blocks_rebuilder::Yield0, ()),
+                    Yield1(blocks_rebuilder::Yield1, ()),
+                    Yield2(blocks_rebuilder::Yield2, Snapshot),
+                }
+
+                mod blocks_rebuilder {
+                    impl Machine for BlocksRebuilder {
+                        type Out = Result<(), BlockError>;
+
+                        fn create(balances: BalanceSet, step_size: usize) -> MachinePoll<BlocksRebuilder> {
+                            MachinePoll::Yield(BlocksRebuilder::Yield0(Yield0 { balances, step_size }, ()))
+                        }
+                    }
+
+                    pub struct Yield0 {
+                        balances: BalanceSet,
+                        step_size: usize,
+                    }
+
+                    impl Yield0 {
+                        pub fn plot(self, _: ()) -> MachinePoll<BlocksRebuilder> {
+                            let Self { balances, step_size } = self;
+
+                            let acc = Accumulator::create(balances);
+                            let mut i = 0;
+
+                            MachinePoll::Yield(BlocksRebuilder::Yield1(
+                                Yield1 { acc, step_size, i },
+                                (),
+                            ))
+                        }
+                    }
+
+                    pub struct Yield1 {
+                        acc: Accumulator,
+                        step_size: usize,
+                        i: usize,
+                    }
+
+                    impl Yield1 {
+                        pub fn plot(self, next: Option<(BlockId, Block)>) -> MachinePoll<BlocksRebuilder> {
+                            let Self { acc, step_size, mut i } = self;
+
+                            let Some((id, block)) = next else {
+                                return MachinePoll::End(Ok(()));
+                            };
+
+                            let Accumulator::Yield0(acc) = acc;
+
+                            let acc = match acc.plot(Some(block)) {
+                                MachinePoll::End(out) => return MachinePoll::End(out.map(|_| ())),
+                                MachinePoll::Yield(acc) => acc,
+                            };
+
+                            i += 1;
+
+                            if i >= step_size {
+                                total_blocks += i;
+
+                                let snapshot = Snapshot {
+                                    balances: acc.balances,
+                                    blocks_count: total_blocks,
+                                    at_block_id: id,
+                                };
+
+                                return MachinePoll::Yield(BlocksRebuilder::Yield2(
+                                    Yield2 { step_size },
+                                    snapshot
+                                ));
+                            } 
+
+                            MachinePoll::Yield(BlocksRebuilder::Yield1(
+                                Yield1 { acc, step_size, i },
+                                (),
+                            ))
+                        }
+                    }
+
+                    pub struct Yield2 {
+                        step_size: usize,
+                    }
+
+                    impl Yield2 {
+                        pub fn plot(self, balances: BalanceSet) -> MachinePoll<BlocksRebuilder> {
+                            let Self { step_size } = self;
+
+                            let acc = Accumulator::create(balances);
+                            let mut i = 0;
+
+                            MachinePoll::Yield(BlocksRebuilder::Yield1(
+                                Yield1 { acc, step_size, i }, 
+                                (),
+                            ))
+                        }
+                    }
+                }
+            }.to_string()
+        );
+    }
+}
