@@ -23,7 +23,11 @@ mod machine_fn {
     use syn::ItemFn;
 
     pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::Error> {
-        todo!()
+        for stmt in item_fn.block.stmts {
+            let _ = crate::yield_points::parse_stmt(&stmt);
+        }
+
+        todo!("NOT MACHINE IMPL")
     }
 }
 
@@ -181,7 +185,7 @@ mod tests {
         let input: ItemFn = parse_quote!(
             fn accumulator(balances: BalanceSet) -> Result<BalanceSet, BlockError> {
                 loop {
-                    let next: Option<Block> = yield (save! { balances }, ());
+                    let next: Option<Block> = yield (save! { balances: BalanceSet }, () as ());
 
                     let Some(block) = next else {
                         return Ok(balances);
@@ -207,10 +211,6 @@ mod tests {
 
                 impl machinite::Machine for Accumulator {
                     type Out = Result<BalanceSet, BlockError>;
-
-                    fn create(balances: BalanceSet) -> MachinePoll<Accumulator> {
-                        MachinePoll::Yield(Acummulator::Yield0(accumulator::Yield0 { balances }, ()))
-                    }
                 }
 
                 mod accumulator {
@@ -246,7 +246,7 @@ mod tests {
                 now: Timestamp,
             ) -> Result<(BalanceSet, Option<SnapshotMeta>), BlockError> {
                 let last: Option<(BalanceSet, SnapshotMeta, BlockMeta)> =
-                    yield (save! { now }, now as Timestamp);
+                    yield (save! { now: Timestamp }, now as Timestamp);
 
                 let (balances, snapshot, range) = match last {
                     Some((balances, snapshot, block_meta)) => (
@@ -258,7 +258,7 @@ mod tests {
                 };
 
                 let result: <Accumulator as Machine>::Out =
-                    yield (save! { snapshot }, Accumulator { balances });
+                    yield (save! { snapshot: Option<SnapshotMeta> }, Accumulator { balances } as Accumulator);
 
                 let result = match result {
                     Err(e) => Err(e),
@@ -283,10 +283,6 @@ mod tests {
                 mod get_balance_at {
                     impl Machine for GetBalanceAt {
                         type Out = Result<(BalanceSet, Option<SnapshotMeta>), BlockError>;
-
-                        fn create(now: Timestamp) -> MachinePoll<GetBalanceAt> {
-                            MachinePoll::Yield(GetBalanceAt::Yield0(Yield0 { now }, ()))
-                        }
                     }
 
                     pub struct Yield0 {
@@ -341,12 +337,12 @@ mod tests {
     fn insert_block_at() {
         let input: ItemFn = parse_quote!(
             fn insert_at(
-                block: crate::Block,
+                block: Block,
                 now: Timestamp,
                 step_size: usize,
             ) -> Result<(), BlockError> {
                 let out: <GetBalanceAt as Machine>::Out =
-                    yield (save! { block, now, step_size }, GetBalanceAt::new(now));
+                    yield (save! { block: Block, now: Timestamp, step_size: usize }, GetBalanceAt::new(now) as GetBalanceAt);
 
                 let (balances, blocks_count) = match result {
                     Ok((balances, blocks_count)) => (balances, blocks_count),
@@ -363,7 +359,7 @@ mod tests {
                     (
                         BlocksRebuilder::new(balances, step_size, blocks_count.unwrap_or(0)),
                         now..,
-                    ),
+                    ) as (BlocksRebuilder, RangeFrom<Timestamp>),
                 );
 
                 let _ = result?;
@@ -390,10 +386,6 @@ mod tests {
                 mod insert_block_at {
                     impl Machine for InsertBlockAt {
                         type Out = Result<(), BlockError>;
-
-                        fn create(block: crate::Block, now: Timestamp, step_size: usize) -> MachinePoll<InsertBlockAt> {
-                            MachinePoll::Yield(InsertBlockAt::Yield0(Yield0 { block, now, step_size }, ()))
-                        }
                     }
 
                     pub struct Yield0 {
@@ -465,11 +457,11 @@ mod tests {
     fn blocks_rebuilder() {
         let input: ItemFn = parse_quote!(
             fn blocks_rebuilder(balances: BalanceSet, step_size: usize) -> Result<(), BlockError> {
-                let acc = Accumulator::create(balances);
+                let acc = Accumulator::new(balances);
                 let mut i = 0;
 
                 loop {
-                    let next: Option<(BlockId, Block)> = yield (save! { acc, step_size, i }, ());
+                    let next: Option<(BlockId, Block)> = yield (save! { acc: Accumulator, step_size: usize, i: usize }, () as ());
 
                     let Some((id, block)) = next else {
                         return Ok(());
@@ -493,10 +485,10 @@ mod tests {
                             at_block_id: id,
                         };
 
-                        let balances: BalanceSet = yield (save! { step_size }, snapshot);
+                        let balances: BalanceSet = yield (save! { step_size: usize }, snapshot as Snapshot);
 
                         let i = 0;
-                        let acc = Accumulator::create(balances);
+                        let acc = Accumulator::new(balances);
 
                         continue;
                     }
@@ -519,10 +511,6 @@ mod tests {
                 mod blocks_rebuilder {
                     impl Machine for BlocksRebuilder {
                         type Out = Result<(), BlockError>;
-
-                        fn create(balances: BalanceSet, step_size: usize) -> MachinePoll<BlocksRebuilder> {
-                            MachinePoll::Yield(BlocksRebuilder::Yield0(Yield0 { balances, step_size }, ()))
-                        }
                     }
 
                     pub struct Yield0 {
@@ -534,7 +522,7 @@ mod tests {
                         pub fn plot(self, _: ()) -> MachinePoll<BlocksRebuilder> {
                             let Self { balances, step_size } = self;
 
-                            let acc = Accumulator::create(balances);
+                            let acc = Accumulator::new(balances);
                             let mut i = 0;
 
                             MachinePoll::Yield(BlocksRebuilder::Yield1(
@@ -597,7 +585,7 @@ mod tests {
                         pub fn plot(self, balances: BalanceSet) -> MachinePoll<BlocksRebuilder> {
                             let Self { step_size } = self;
 
-                            let acc = Accumulator::create(balances);
+                            let acc = Accumulator::new(balances);
                             let mut i = 0;
 
                             MachinePoll::Yield(BlocksRebuilder::Yield1(
