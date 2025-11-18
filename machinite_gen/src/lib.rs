@@ -1,184 +1,132 @@
 use proc_macro::TokenStream;
-use syn::{
-    Expr, Ident, ItemFn, Pat, PatType, Token, Type,
-    parse::{Parse, Parser},
-    parse_macro_input,
-    punctuated::Punctuated,
-    token::{Brace, Yield},
-};
+use syn::{ItemFn, parse_macro_input};
 
 #[proc_macro_attribute]
-pub fn machine(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn machine(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(item as ItemFn);
-    let fn_name = &input_fn.sig.ident;
-    let fn_body = &input_fn.block;
 
-    let _ = input_fn.block.stmts.into_iter().map(|stmt| {});
-
-    todo!()
-}
-
-mod machine_fn {
-    use proc_macro2::TokenStream;
-    use syn::ItemFn;
-
-    pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::Error> {
-        for stmt in item_fn.block.stmts {
-            let _ = crate::yield_points::parse_stmt(&stmt);
-        }
-
-        todo!("NOT MACHINE IMPL")
+    match machine_fn::machine(attr.into(), input_fn) {
+        Ok(output) => output.into(),
+        Err(err) => err.to_compile_error().into(),
     }
 }
 
-mod yield_points {
-    use syn::{
-        Expr, Ident, Pat, PatType, Token, Type,
-        parse::{Parse, Parser},
-        punctuated::Punctuated,
-        token::Brace,
-    };
-
-    pub struct YieldPoint {
-        pub let_token: Token![let],
-        pub pat: Pat,
-        pub colon_token: Token![:],
-        pub ty: Type,
-        pub eq_token: Token![=],
-        pub yield_token: Token![yield],
-        pub expr: (YieldSave, syn::ExprCast),
-    }
-
-    pub struct YieldSave {
-        pub ident: YieldSaveMacroIdent,
-        pub bang_token: Token![!],
-        pub brace: Brace,
-        pub items: Punctuated<YieldSaveItem, Token![,]>,
-    }
-
-    pub struct YieldSaveItem {
-        pub ident: Ident,
-        pub colon_token: Token![:],
-        pub ty: Type,
-    }
-
-    pub struct YieldSaveMacroIdent;
-
-    pub fn parse_stmt(stmt: &syn::Stmt) -> Option<YieldPoint> {
-        let (let_token, pat, colon_token, ty, eq_token, expr) = match &stmt {
-            syn::Stmt::Local(syn::Local {
-                let_token,
-                pat:
-                    Pat::Type(PatType {
-                        pat,
-                        ty,
-                        colon_token,
-                        ..
-                    }),
-                init:
-                    Some(syn::LocalInit {
-                        eq_token,
-                        diverge: None,
-                        expr,
-                    }),
-                ..
-            }) => (
-                *let_token,
-                (**pat).clone(),
-                *colon_token,
-                (**ty).clone(),
-                *eq_token,
-                expr,
-            ),
-            _ => return None,
-        };
-
-        let (expr, yield_token) = match &**expr {
-            Expr::Yield(syn::ExprYield {
-                expr: Some(expr),
-                yield_token,
-                ..
-            }) => (expr, yield_token),
-            _ => return None,
-        };
-
-        let (first, second, rest) = match &**expr {
-            Expr::Tuple(syn::ExprTuple { elems, .. }) => {
-                let mut iter = elems.iter();
-                (iter.next(), iter.next(), iter.next())
-            }
-            _ => return None,
-        };
-
-        let (save, cast) = match (first, second, rest) {
-            (
-                Some(Expr::Macro(syn::ExprMacro {
-                    mac:
-                        syn::Macro {
-                            path,
-                            delimiter: syn::MacroDelimiter::Brace(brace),
-                            bang_token,
-                            tokens,
-                        },
-                    ..
-                })),
-                Some(Expr::Cast(cast)),
-                None,
-            ) => {
-                let ident = if path.is_ident("save") {
-                    YieldSaveMacroIdent
-                } else {
-                    return None;
-                };
-
-                let items = Punctuated::<YieldSaveItem, Token![,]>::parse_terminated
-                    .parse2(tokens.clone())
-                    .unwrap();
-
-                (
-                    YieldSave {
-                        ident,
-                        bang_token: *bang_token,
-                        brace: *brace,
-                        items,
-                    },
-                    cast,
-                )
-            }
-            _ => return None,
-        };
-
-        Some(YieldPoint {
-            let_token,
-            pat,
-            colon_token,
-            ty,
-            eq_token,
-            yield_token: *yield_token,
-            expr: (save, cast.clone()),
-        })
-    }
-
-    impl Parse for YieldSaveItem {
-        fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-            let ident = input.parse::<Ident>()?;
-            let colon_token = input.parse::<Token![:]>()?;
-            let ty = input.parse::<Type>()?;
-
-            Ok(YieldSaveItem {
-                ident,
-                colon_token,
-                ty,
-            })
-        }
-    }
-}
+mod machine_fn;
+mod yield_points;
 
 #[cfg(test)]
 mod tests {
     use proc_macro2::TokenStream;
     use quote::quote;
     use syn::{ItemFn, parse_quote};
+
+    #[test]
+    fn get_balances_at() {
+        let input: ItemFn = parse_quote!(
+            fn get_balance_at(
+                now: Timestamp,
+            ) -> Result<(BalanceSet, Option<SnapshotMeta>), BlockError> {
+                let last: Option<(BalanceSet, SnapshotMeta, BlockMeta)> =
+                    yield (save! { now: Timestamp }, now as Timestamp);
+
+                let (balances, snapshot, range) = match last {
+                    Some((balances, snapshot, block_meta)) => (
+                        balances,
+                        Some(snapshot),
+                        GetBlocks::Between(block_meta.at..=now),
+                    ),
+                    None => (BalanceSet::default(), None, GetBlocks::Until(..=now)),
+                };
+
+                let result: <Accumulator as Machine>::Out = yield (
+                    save! { snapshot: Option<SnapshotMeta> },
+                    (Accumulator { balances }, range) as (Accumulator, GetBlocks),
+                );
+
+                let result = match result {
+                    Err(e) => Err(e),
+                    Ok(balances) => Ok((balances, snapshot)),
+                };
+
+                result
+            }
+        );
+        let attr: TokenStream = syn::parse_quote!(GetBalancesAt);
+
+        let output = super::machine_fn::machine(attr, input).unwrap();
+
+        assert_eq!(
+            output.to_string(),
+            quote! {
+                pub enum GetBalanceAt {
+                    Yield0(get_balance_at::Yield0, ()),
+                    Yield1(get_balance_at::Yield1, ()),
+                    Yield2(get_balance_at::Yield2, (Accumulator, GetBlocks)),
+                }
+
+                mod get_balance_at {
+                    impl Machine for GetBalanceAt {
+                        type Out = Result<(BalanceSet, Option<SnapshotMeta>), BlockError>;
+                    }
+
+                    pub struct Yield0 {
+                        now: Timestamp,
+                    }
+
+                    impl Yield0 {
+                        pub fn plot(self, _: ()) -> MachinePoll<GetBalanceAt> {
+                            let Self { now } = self;
+                            MachinePoll::Yield(GetBalanceAt::Yield1(Yield1 { now }, now))
+                        }
+                    }
+
+                    pub struct Yield1 {
+                        now: Timestamp,
+                    }
+
+                    impl Yield1 {
+                        pub fn plot(
+                            self,
+                            last: Option<(BalanceSet, SnapshotMeta, BlockMeta)>,
+                        ) -> MachinePoll<GetBalanceAt> {
+                            let Self { now } = self;
+
+                            let (balances, snapshot, range) = match last {
+                                Some((balances, snapshot, block_meta)) => (
+                                    balances,
+                                    Some(snapshot),
+                                    GetBlocks::Between(block_meta.at..=now),
+                                ),
+                                None => (BalanceSet::default(), None, GetBlocks::Until(..=now)),
+                            };
+
+                            MachinePoll::Yield(GetBalanceAt::IntoAcummulator(
+                                Yield1 { snapshot },
+                                (Accumulator { balances }, range),
+                            ))
+                        }
+                    }
+
+                    pub struct Yield2 {
+                        snapshot: Option<SnapshotMeta>,
+                    }
+
+                    impl Yield2 {
+                        pub fn plot(self, result: Result<BalanceSet, BlockError>) -> MachinePoll<GetBalanceAt> {
+                            let Self { snapshot } = self;
+
+                            let result = match result {
+                                Err(e) => Err(e),
+                                Ok(balances) => Ok((balances, snapshot)),
+                            };
+
+                            MachinePoll::End(result)
+                        }
+                    }
+                }
+            }.to_string()
+        );
+    }
 
     #[test]
     fn accumulator() {
@@ -250,100 +198,6 @@ mod tests {
     }
 
     #[test]
-    fn get_balances_at() {
-        let input: ItemFn = parse_quote!(
-            fn get_balance_at(
-                now: Timestamp,
-            ) -> Result<(BalanceSet, Option<SnapshotMeta>), BlockError> {
-                let last: Option<(BalanceSet, SnapshotMeta, BlockMeta)> =
-                    yield (save! { now: Timestamp }, now as Timestamp);
-
-                let (balances, snapshot, range) = match last {
-                    Some((balances, snapshot, block_meta)) => (
-                        balances,
-                        Some(snapshot),
-                        GetBlocks::Between(block_meta.at..=now),
-                    ),
-                    None => (BalanceSet::default(), None, GetBlocks::Until(..=now)),
-                };
-
-                let result: <Accumulator as Machine>::Out =
-                    yield (save! { snapshot: Option<SnapshotMeta> }, (Accumulator { balances }, range) as (Accumulator, GetBlocks));
-
-                let result = match result {
-                    Err(e) => Err(e),
-                    Ok(balances) => Ok((balances, snapshot)),
-                };
-
-                result
-            }
-        );
-        let attr: TokenStream = syn::parse_quote!(GetBalancesAt);
-
-        let output = super::machine_fn::machine(attr, input).unwrap();
-
-        assert_eq!(
-            output.to_string(),
-            quote! {
-                pub enum GetBalanceAt {
-                    Yield0(get_balance_at::Yield0, ()),
-                    Yield1(get_balance_at::Yield1, (Accumulator, GetBlocks)),
-                }
-
-                mod get_balance_at {
-                    impl Machine for GetBalanceAt {
-                        type Out = Result<(BalanceSet, Option<SnapshotMeta>), BlockError>;
-                    }
-
-                    pub struct Yield0 {
-                        now: Timestamp,
-                    }
-
-                    impl Yield0 {
-                        pub fn plot(
-                            self,
-                            last: Option<(BalanceSet, SnapshotMeta, BlockMeta)>,
-                        ) -> MachinePoll<GetBalanceAt> {
-                            let Self { now } = self;
-
-                            let (balances, snapshot, range) = match last {
-                                Some((balances, snapshot, block_meta)) => (
-                                    balances,
-                                    Some(snapshot),
-                                    GetBlocks::Between(block_meta.at..=now),
-                                ),
-                                None => (BalanceSet::default(), None, GetBlocks::Until(..=now)),
-                            };
-
-                            MachinePoll::Yield(GetBalanceAt::IntoAcummulator(
-                                Yield1 { snapshot },
-                                (Accumulator { balances }, range),
-                            ))
-                        }
-                    }
-
-                    pub struct Yield1 {
-                        snapshot: Option<SnapshotMeta>,
-                    }
-
-                    impl Yield1 {
-                        pub fn plot(self, result: Result<BalanceSet, BlockError>) -> MachinePoll<GetBalanceAt> {
-                            let Self { snapshot } = self;
-
-                            let result = match result {
-                                Err(e) => Err(e),
-                                Ok(balances) => Ok((balances, snapshot)),
-                            };
-
-                            MachinePoll::End(result)
-                        }
-                    }
-                }
-            }.to_string()
-        );
-    }
-
-    #[test]
     fn insert_block_at() {
         let input: ItemFn = parse_quote!(
             fn insert_block_at(
@@ -351,8 +205,10 @@ mod tests {
                 now: Timestamp,
                 step_size: usize,
             ) -> Result<(), BlockError> {
-                let out: <GetBalanceAt as Machine>::Out =
-                    yield (save! { block: Block, now: Timestamp, step_size: usize }, GetBalanceAt::new(now) as GetBalanceAt);
+                let out: <GetBalanceAt as Machine>::Out = yield (
+                    save! { block: Block, now: Timestamp, step_size: usize },
+                    GetBalanceAt::new(now) as GetBalanceAt,
+                );
 
                 let (balances, blocks_count) = match result {
                     Ok((balances, blocks_count)) => (balances, blocks_count),
@@ -385,77 +241,55 @@ mod tests {
             output.to_string(),
             quote! {
                 pub enum InsertBlockAt {
-                    Yield0(insert_at::Yield0, ()),
-                    Yield1(insert_at::Yield1, GetBalanceAt),
+                    Yield0(insert_block_at::Yield0, ()),
+                    Yield1(insert_block_at::Yield1, GetBalanceAt),
                     Yield2(
-                        insert_at::Yield2,
-                        (BlocksRebuilder, RangeFrom<Timestamp>),
-                    ),
+                        insert_block_at::Yield2,
+                        (BlocksRebuilder, RangeFrom<Timestamp>)
+                    )
+                }
+
+                impl machinite::Machine for InsertBlockAt {
+                    type Out = Result<(), BlockError>;
                 }
 
                 mod insert_block_at {
-                    impl Machine for InsertBlockAt {
-                        type Out = Result<(), BlockError>;
-                    }
-
                     pub struct Yield0 {
-                        block: Vec<Operation>,
+                        block: Block,
                         now: Timestamp,
-                        step_size: usize,
+                        step_size: usize
                     }
-
                     impl Yield0 {
                         pub fn plot(self, _: ()) -> MachinePoll<InsertBlockAt> {
                             let Self { block, now, step_size } = self;
-
-                            MachinePoll::Yield(InsertAt::Yield1(
-                                Yield1 {
-                                    block,
-                                    now,
-                                    step_size,
-                                },
-                                GetBalanceAt::new(now),
-                            ))
+                            MachinePoll::Yield(InsertBlockAt::Yield1(Yield1 { block, now, step_size }, GetBalanceAt::new(now)))
                         }
                     }
-
                     pub struct Yield1 {
-                        block: Vec<Operation>,
+                        block: Block,
                         now: Timestamp,
-                        step_size: usize,
+                        step_size: usize
                     }
-
                     impl Yield1 {
                         pub fn plot(self, result: <GetBalanceAt as Machine>::Out) -> MachinePoll<InsertBlockAt> {
                             let Self { block, now, step_size } = self;
-
                             let (balances, blocks_count) = match result {
                                 Ok((balances, blocks_count)) => (balances, blocks_count),
                                 Err(e) => return MachinePoll::End(Err(e)),
                             };
-
                             let balances = match balances.apply_many(block.into_iter()) {
                                 Ok(balances) => balances,
                                 Err(e) => return MachinePoll::End(Err(e)),
                             };
-
-                            MachinePoll::Yield(InsertAt::ValidateFuture(
-                                FutureRebuilded {},
-                                (
-                                    BlocksRebuilder::new(balances, step_size, blocks_count.unwrap_or(0)),
-                                    now..,
-                                ),
-                            ))
+                            MachinePoll::Yield(InsertBlockAt::Yield2(Yield2 {}, (BlocksRebuilder::new(balances, step_size, blocks_count.unwrap_or(0)), now..,)))
                         }
                     }
-
                     pub struct Yield2 {}
-
                     impl Yield2 {
-                        pub fn plot(self, result: Result<(), BlockError>) -> MachinePoll<InsertBlockAt> {
+                        pub fn plot(self, result: Result<BalanceSet, BlockError>) -> MachinePoll<InsertBlockAt> {
                             let Self {} = self;
-
-                            MachinePoll::End(result)
+                            let _ = result?;
+                            MachinePoll::End(Ok(()))
                         }
                     }
                 }
@@ -471,7 +305,10 @@ mod tests {
                 let mut i = 0;
 
                 while save! { acc: Accumulator, step_size: usize, i: usize } {
-                    let next: Option<(BlockId, Block)> = yield (save! { mut acc: Accumulator, step_size: usize, mut i: usize }, () as ());
+                    let next: Option<(BlockId, Block)> = yield (
+                        save! { mut acc: Accumulator, step_size: usize, mut i: usize },
+                        () as (),
+                    );
 
                     let Some((id, block)) = next else {
                         return Ok(());
@@ -495,7 +332,8 @@ mod tests {
                             at_block_id: id,
                         };
 
-                        let balances: BalanceSet = yield (save! { step_size: usize }, snapshot as Snapshot);
+                        let balances: BalanceSet =
+                            yield (save! { step_size: usize }, snapshot as Snapshot);
 
                         let i = 0;
                         let acc = Accumulator::new(balances);
@@ -549,7 +387,7 @@ mod tests {
                             let Self { acc, step_size, i } = self;
 
                             MachinePoll::Yield(BlocksRebuilder::Yield1(
-                                Yield1 { acc, step_size, i }, 
+                                Yield1 { acc, step_size, i },
                                 (),
                             ))
                         }
@@ -591,7 +429,7 @@ mod tests {
                                     Yield2 {},
                                     snapshot
                                 ));
-                            } 
+                            }
 
                             Loop0 { acc, step_size, i }.plot()
                         }
