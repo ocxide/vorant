@@ -23,6 +23,7 @@ pub struct YieldSave {
 }
 
 pub struct YieldSaveItem {
+    pub mutability: Option<Token![mut]>,
     pub ident: Ident,
     pub colon_token: Token![:],
     pub ty: Type,
@@ -30,7 +31,7 @@ pub struct YieldSaveItem {
 
 pub struct YieldSaveMacroIdent;
 
-pub fn parse_stmt(stmt: &syn::Stmt) -> Option<YieldPoint> {
+pub fn parse_stmt(stmt: syn::Stmt) -> Result<YieldPoint, syn::Error> {
     let (let_token, pat, colon_token, ty, eq_token, expr) = match &stmt {
         syn::Stmt::Local(syn::Local {
             let_token,
@@ -56,7 +57,7 @@ pub fn parse_stmt(stmt: &syn::Stmt) -> Option<YieldPoint> {
             *eq_token,
             expr,
         ),
-        _ => return None,
+        _ => return Err(syn::Error::new_spanned(stmt, "invalid syntax for yield")),
     };
 
     let (expr, yield_token) = match &**expr {
@@ -65,7 +66,7 @@ pub fn parse_stmt(stmt: &syn::Stmt) -> Option<YieldPoint> {
             yield_token,
             ..
         }) => (expr, yield_token),
-        _ => return None,
+        _ => return Err(syn::Error::new_spanned(expr, "expected yield")),
     };
 
     let (first, second, rest) = match &**expr {
@@ -73,7 +74,7 @@ pub fn parse_stmt(stmt: &syn::Stmt) -> Option<YieldPoint> {
             let mut iter = elems.iter();
             (iter.next(), iter.next(), iter.next())
         }
-        _ => return None,
+        _ => return Err(syn::Error::new_spanned(expr, "expected tuple")),
     };
 
     let (save, cast) = match (first, second, rest) {
@@ -94,7 +95,10 @@ pub fn parse_stmt(stmt: &syn::Stmt) -> Option<YieldPoint> {
             let ident = if path.is_ident("save") {
                 YieldSaveMacroIdent
             } else {
-                return None;
+                return Err(syn::Error::new_spanned(
+                    path,
+                    "expected macro name to be `save`",
+                ));
             };
 
             let items = Punctuated::<YieldSaveItem, Token![,]>::parse_terminated
@@ -111,10 +115,10 @@ pub fn parse_stmt(stmt: &syn::Stmt) -> Option<YieldPoint> {
                 cast,
             )
         }
-        _ => return None,
+        _ => return Err(syn::Error::new_spanned(expr, "expected tuple of size 2")),
     };
 
-    Some(YieldPoint {
+    Ok(YieldPoint {
         let_token,
         pat,
         colon_token,
@@ -127,15 +131,21 @@ pub fn parse_stmt(stmt: &syn::Stmt) -> Option<YieldPoint> {
 
 impl Parse for YieldSaveItem {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let mut_token = if input.peek(Token![mut]) {
+            Some(input.parse::<Token![mut]>()?)
+        } else {
+            None
+        };
+
         let ident = input.parse::<Ident>()?;
         let colon_token = input.parse::<Token![:]>()?;
         let ty = input.parse::<Type>()?;
 
         Ok(YieldSaveItem {
+            mutability: mut_token,
             ident,
             colon_token,
             ty,
         })
     }
 }
-

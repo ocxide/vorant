@@ -2,6 +2,8 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Expr, Ident, ItemFn, Pat, Stmt, Token, Type, spanned::Spanned};
 
+use crate::yield_points::{YieldPoint, YieldSave};
+
 pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::Error> {
     let machine_ident: Ident = syn::parse2(attr)?;
     let fn_ident: Ident = item_fn.sig.ident;
@@ -90,13 +92,15 @@ fn top_yields(
     let mut yield_idx = 0;
 
     while incoming_stmts.len() > 0 {
-        for stmt in &mut incoming_stmts {
-            if let Some(yield_point_) = crate::yield_points::parse_stmt(&stmt) {
-                yield_point = Some(yield_point_);
-                break;
+        'stmt_collect: for stmt in &mut incoming_stmts {
+            match parse_stmt(stmt)? {
+                MachiniteStmt::Yield(yield_point_) => {
+                    yield_point = Some(yield_point_);
+                    break 'stmt_collect;
+                }
+                MachiniteStmt::Stmt(stmt) => stmts.push(stmt),
+                _ => todo!(),
             }
-
-            stmts.push(stmt);
         }
 
         let mut next_yield: Option<(Vec<_>, Pat, Type)> = None;
@@ -117,7 +121,7 @@ fn top_yields(
                         .0
                         .items
                         .into_iter()
-                        .map(|item| (None::<Token![mut]>, item.ident, item.ty))
+                        .map(|item| (item.mutability, item.ident, item.ty))
                         .collect(),
                     yield_point.pat,
                     yield_point.ty,
@@ -227,6 +231,27 @@ fn expand_top_yield<'y>(
             }
         }
     }
+}
+
+pub enum MachiniteStmt {
+    Yield(YieldPoint),
+    Stmt(Stmt),
+    While(YieldSave),
+}
+
+fn parse_stmt(stmt: syn::Stmt) -> Result<MachiniteStmt, syn::Error> {
+    let stmt = match stmt {
+        syn::Stmt::Local(syn::Local {
+            init: Some(syn::LocalInit { ref expr, .. }),
+            ..
+        }) if matches!(&**expr, syn::Expr::Yield(_)) => {
+            MachiniteStmt::Yield(crate::yield_points::parse_stmt(stmt)?)
+        }
+
+        _ => MachiniteStmt::Stmt(stmt),
+    };
+
+    Ok(stmt)
 }
 
 #[cfg(test)]
