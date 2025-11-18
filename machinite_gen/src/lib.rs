@@ -13,6 +13,91 @@ pub fn machine(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 mod machine_fn;
 mod yield_points;
+mod save {
+    use proc_macro2::Span;
+    use syn::{
+        Ident, Token, Type,
+        parse::{Parse, Parser},
+        punctuated::Punctuated,
+    };
+
+    pub struct PointSave {
+        pub items: Punctuated<PointSaveItem, Token![,]>,
+    }
+
+    pub struct PointSaveItem {
+        pub mutability: Option<Token![mut]>,
+        pub ident: Ident,
+        pub _colon_token: Token![:],
+        pub ty: Type,
+    }
+
+    impl Parse for PointSaveItem {
+        fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+            let mut_token = if input.peek(Token![mut]) {
+                Some(input.parse::<Token![mut]>()?)
+            } else {
+                None
+            };
+
+            let ident = input.parse::<Ident>()?;
+            let colon_token = input.parse::<Token![:]>()?;
+            let ty = input.parse::<Type>()?;
+
+            Ok(PointSaveItem {
+                mutability: mut_token,
+                ident,
+                _colon_token: colon_token,
+                ty,
+            })
+        }
+    }
+
+    impl TryFrom<(Span, Vec<syn::Attribute>)> for PointSave {
+        type Error = syn::Error;
+
+        fn try_from((span, attrs): (Span, Vec<syn::Attribute>)) -> Result<Self, Self::Error> {
+            let tokens = attrs.into_iter().find_map(|attr| match attr.meta {
+                syn::Meta::List(syn::MetaList {
+                    path,
+                    delimiter: syn::MacroDelimiter::Brace(_),
+                    tokens,
+                }) if is_save_path(&path) => Some(tokens),
+                _ => None,
+            });
+
+            let Some(tokens) = tokens else {
+                return Err(syn::Error::new(
+                    span,
+                    "expected `machinite::save { .. }` attribute",
+                ));
+            };
+
+            let items = Punctuated::<PointSaveItem, Token![,]>::parse_terminated.parse2(tokens)?;
+
+            Ok(PointSave { items })
+        }
+    }
+
+    fn is_save_path(path: &syn::Path) -> bool {
+        path.leading_colon.is_none()
+            && path.segments.len() == 2
+            && path.segments[0].ident == "machinite"
+            && path.segments[1].ident == "save"
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use syn::parse_quote;
+
+        #[test]
+        fn checks_save_path() {
+            let path: syn::Path = parse_quote!(machinite::save);
+            assert!(is_save_path(&path), "expected `machine::save`");
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -26,8 +111,8 @@ mod tests {
             fn get_balance_at(
                 now: Timestamp,
             ) -> Result<(BalanceSet, Option<SnapshotMeta>), BlockError> {
-                let last: Option<(BalanceSet, SnapshotMeta, BlockMeta)> =
-                    yield (save! { now: Timestamp }, now as Timestamp);
+                #[machinite::save { now: Timestamp }]
+                let last: Option<(BalanceSet, SnapshotMeta, BlockMeta)> = yield now as Timestamp;
 
                 let (balances, snapshot, range) = match last {
                     Some((balances, snapshot, block_meta)) => (
@@ -38,10 +123,9 @@ mod tests {
                     None => (BalanceSet::default(), None, GetBlocks::Until(..=now)),
                 };
 
-                let result: <Accumulator as Machine>::Out = yield (
-                    save! { snapshot: Option<SnapshotMeta> },
-                    (Accumulator { balances }, range) as (Accumulator, GetBlocks),
-                );
+                #[machinite::save { snapshot: Option<SnapshotMeta> }]
+                let result: <Accumulator as Machine>::Out =
+                    yield (Accumulator { balances }, range) as (Accumulator, GetBlocks);
 
                 let result = match result {
                     Err(e) => Err(e),

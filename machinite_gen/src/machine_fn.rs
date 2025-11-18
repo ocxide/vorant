@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Expr, Ident, ItemFn, Pat, Stmt, Token, Type, spanned::Spanned};
 
-use crate::yield_points::{YieldPoint, YieldSave};
+use crate::{save::PointSave, yield_points::YieldPoint};
 
 pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::Error> {
     let machine_ident: Ident = syn::parse2(attr)?;
@@ -113,26 +113,24 @@ fn top_yields(
                 let return_yield = YieldPointReturn::Yield {
                     variant: format_ident!("Yield{}", yield_returns.len() + 1),
                     fields: yield_point
-                        .expr
-                        .0
+                        .save
                         .items
                         .iter()
                         .map(|item| item.ident.clone())
                         .collect(),
-                    yield_expr: *yield_point.expr.1.expr,
+                    yield_expr: *yield_point.expr.expr,
                 };
 
                 let next_point = Point::Yield {
                     resume_pat: yield_point.pat,
                     resume_ty: yield_point.ty,
                     fields: yield_point
-                        .expr
-                        .0
+                        .save
                         .items
                         .into_iter()
                         .map(|item| (item.mutability, item.ident, item.ty))
                         .collect(),
-                    yield_ty: *yield_point.expr.1.ty,
+                    yield_ty: *yield_point.expr.ty,
                 };
 
                 (return_yield, Some(next_point))
@@ -263,7 +261,7 @@ fn expand_top_yield<'y>(
 pub enum MachiniteStmt {
     Yield(YieldPoint),
     Stmt(Stmt),
-    While(YieldSave),
+    While(PointSave),
 }
 
 fn parse_stmt(stmt: syn::Stmt) -> Result<MachiniteStmt, syn::Error> {
