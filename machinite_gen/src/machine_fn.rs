@@ -7,7 +7,7 @@ pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::E
 
     let machine_ident: Ident = syn::parse2(attr)?;
 
-    let args: Vec<_> = item_fn
+    let mut args: Vec<_> = item_fn
         .sig
         .inputs
         .into_iter()
@@ -43,66 +43,91 @@ pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::E
     let mut stmts = vec![];
 
     let mut yield_point = None;
+    let mut resume_pat: Pat = syn::parse_quote! { _ };
+    let mut resume_ty: Type = syn::parse_quote! { () };
 
-    for stmt in &mut incoming_stmts {
-        if let Some(yield_point_) = crate::yield_points::parse_stmt(&stmt) {
-            yield_point = Some(yield_point_);
-            break;
+    let mut yield_idx = 0;
+
+    while incoming_stmts.len() > 0 {
+        for stmt in &mut incoming_stmts {
+            if let Some(yield_point_) = crate::yield_points::parse_stmt(&stmt) {
+                yield_point = Some(yield_point_);
+                break;
+            }
+
+            stmts.push(stmt);
         }
 
-        stmts.push(stmt);
-    }
+        let mut next_yield: Option<(Vec<_>, Pat, Type)> = None;
 
-    let yield_point_return = match yield_point {
-        Some(yield_point) => {
-            let fields = yield_point
-                .expr
-                .0
-                .items
-                .into_iter()
-                .map(|item| item.ident)
-                .collect();
+        let yield_point_return = match yield_point.take() {
+            Some(yield_point) => {
+                let fields = yield_point
+                    .expr
+                    .0
+                    .items
+                    .iter()
+                    .map(|item| item.ident.clone())
+                    .collect();
 
-            YieldPointReturn::Yield {
-                variant: format_ident!("Yield0"),
-                fields,
-                yield_expr: *yield_point.expr.1.expr,
-            }
-        }
-
-        None => match stmts.pop() {
-            None => YieldPointReturn::End(syn::parse_quote! { () }),
-            Some(syn::Stmt::Expr(
-                syn::Expr::Return(syn::ExprReturn {
-                    expr: Some(expr), ..
-                }),
-                _,
-            )) => YieldPointReturn::End(*expr),
-            Some(syn::Stmt::Expr(syn::Expr::Return(syn::ExprReturn { expr: None, .. }), _)) => {
-                YieldPointReturn::End(syn::parse_quote! { () })
-            }
-            Some(syn::Stmt::Expr(expr, None)) => YieldPointReturn::End(expr),
-            _ => {
-                return Err(syn::Error::new(
-                    stmts.last().unwrap().span(),
-                    "expected return statement",
+                next_yield = Some((
+                    yield_point
+                        .expr
+                        .0
+                        .items
+                        .into_iter()
+                        .map(|item| (None::<Token![mut]>, item.ident, item.ty))
+                        .collect(),
+                    yield_point.pat,
+                    yield_point.ty,
                 ));
+
+                YieldPointReturn::Yield {
+                    variant: format_ident!("Yield{}", yield_idx + 1),
+                    fields,
+                    yield_expr: *yield_point.expr.1.expr,
+                }
             }
-        },
-    };
 
-    let resume_pat: Pat = syn::parse_quote! { _ };
-    let resume_ty: Type = syn::parse_quote! { () };
+            None => match stmts.pop() {
+                None => YieldPointReturn::End(syn::parse_quote! { () }),
+                Some(syn::Stmt::Expr(
+                    syn::Expr::Return(syn::ExprReturn {
+                        expr: Some(expr), ..
+                    }),
+                    _,
+                )) => YieldPointReturn::End(*expr),
+                Some(syn::Stmt::Expr(syn::Expr::Return(syn::ExprReturn { expr: None, .. }), _)) => {
+                    YieldPointReturn::End(syn::parse_quote! { () })
+                }
+                Some(syn::Stmt::Expr(expr, None)) => YieldPointReturn::End(expr),
+                _ => {
+                    return Err(syn::Error::new(
+                        stmts.last().unwrap().span(),
+                        "expected return statement",
+                    ));
+                }
+            },
+        };
 
-    output.extend(expand_top_yield(
-        stmts.into_iter(),
-        args.iter()
-            .map(|(mutability, ident, ty)| (*mutability, ident, ty)),
-        0,
-        (&resume_pat, &resume_ty),
-        &machine_ident,
-        yield_point_return,
-    ));
+        output.extend(expand_top_yield(
+            stmts.drain(..),
+            args.iter()
+                .map(|(mutability, ident, ty)| (*mutability, ident, ty)),
+            yield_idx,
+            (&resume_pat, &resume_ty),
+            &machine_ident,
+            yield_point_return,
+        ));
+
+        yield_idx += 1;
+
+        if let Some((args_, resume_pat_, resume_ty_)) = next_yield {
+            args = args_;
+            resume_pat = resume_pat_;
+            resume_ty = resume_ty_;
+        }
+    }
 
     Ok(output)
 }
@@ -134,7 +159,7 @@ fn expand_top_yield<'y>(
     });
 
     let return_tokens = match yield_point_return {
-        YieldPointReturn::End(expr) => quote! { #expr },
+        YieldPointReturn::End(expr) => quote! { MachinePoll::End( #expr ) },
         YieldPointReturn::Yield {
             variant,
             fields,
