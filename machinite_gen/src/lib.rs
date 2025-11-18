@@ -58,37 +58,37 @@ mod tests {
         assert_eq!(
             output.to_string(),
             quote! {
-                pub enum GetBalanceAt {
+                enum GetBalancesAt {
                     Yield0(get_balance_at::Yield0, ()),
-                    Yield1(get_balance_at::Yield1, ()),
-                    Yield2(get_balance_at::Yield2, (Accumulator, GetBlocks)),
+                    Yield1(get_balance_at::Yield1, Timestamp),
+                    Yield2(get_balance_at::Yield2, (Accumulator, GetBlocks))
                 }
 
                 mod get_balance_at {
-                    impl Machine for GetBalanceAt {
+                    impl machinite::Machine for GetBalancesAt {
                         type Out = Result<(BalanceSet, Option<SnapshotMeta>), BlockError>;
                     }
 
                     pub struct Yield0 {
-                        now: Timestamp,
+                        now: Timestamp
                     }
 
                     impl Yield0 {
-                        pub fn plot(self, _: ()) -> MachinePoll<GetBalanceAt> {
+                        pub fn plot(self, _: ()) -> MachinePoll<GetBalancesAt> {
                             let Self { now } = self;
-                            MachinePoll::Yield(GetBalanceAt::Yield1(Yield1 { now }, now))
+                            MachinePoll::Yield(GetBalancesAt::Yield1(Yield1 { now }, now))
                         }
                     }
 
                     pub struct Yield1 {
-                        now: Timestamp,
+                        now: Timestamp
                     }
 
                     impl Yield1 {
                         pub fn plot(
                             self,
-                            last: Option<(BalanceSet, SnapshotMeta, BlockMeta)>,
-                        ) -> MachinePoll<GetBalanceAt> {
+                            last: Option<(BalanceSet, SnapshotMeta, BlockMeta)>
+                        ) -> MachinePoll<GetBalancesAt> {
                             let Self { now } = self;
 
                             let (balances, snapshot, range) = match last {
@@ -100,19 +100,19 @@ mod tests {
                                 None => (BalanceSet::default(), None, GetBlocks::Until(..=now)),
                             };
 
-                            MachinePoll::Yield(GetBalanceAt::IntoAcummulator(
-                                Yield1 { snapshot },
-                                (Accumulator { balances }, range),
+                            MachinePoll::Yield(GetBalancesAt::Yield2(
+                                Yield2 { snapshot },
+                                (Accumulator { balances }, range)
                             ))
                         }
                     }
 
                     pub struct Yield2 {
-                        snapshot: Option<SnapshotMeta>,
+                        snapshot: Option<SnapshotMeta>
                     }
 
                     impl Yield2 {
-                        pub fn plot(self, result: Result<BalanceSet, BlockError>) -> MachinePoll<GetBalanceAt> {
+                        pub fn plot(self, result: <Accumulator as Machine>::Out) -> MachinePoll<GetBalancesAt> {
                             let Self { snapshot } = self;
 
                             let result = match result {
@@ -205,9 +205,9 @@ mod tests {
                 now: Timestamp,
                 step_size: usize,
             ) -> Result<(), BlockError> {
-                let out: <GetBalanceAt as Machine>::Out = yield (
+                let out: <GetBalancesAt as Machine>::Out = yield (
                     save! { block: Block, now: Timestamp, step_size: usize },
-                    GetBalanceAt::new(now) as GetBalanceAt,
+                    GetBalancesAt::new(now) as GetBalancesAt,
                 );
 
                 let (balances, blocks_count) = match result {
@@ -242,7 +242,7 @@ mod tests {
             quote! {
                 pub enum InsertBlockAt {
                     Yield0(insert_block_at::Yield0, ()),
-                    Yield1(insert_block_at::Yield1, GetBalanceAt),
+                    Yield1(insert_block_at::Yield1, GetBalancesAt),
                     Yield2(
                         insert_block_at::Yield2,
                         (BlocksRebuilder, RangeFrom<Timestamp>)
@@ -262,7 +262,7 @@ mod tests {
                     impl Yield0 {
                         pub fn plot(self, _: ()) -> MachinePoll<InsertBlockAt> {
                             let Self { block, now, step_size } = self;
-                            MachinePoll::Yield(InsertBlockAt::Yield1(Yield1 { block, now, step_size }, GetBalanceAt::new(now)))
+                            MachinePoll::Yield(InsertBlockAt::Yield1(Yield1 { block, now, step_size }, GetBalancesAt::new(now)))
                         }
                     }
                     pub struct Yield1 {
@@ -271,7 +271,7 @@ mod tests {
                         step_size: usize
                     }
                     impl Yield1 {
-                        pub fn plot(self, result: <GetBalanceAt as Machine>::Out) -> MachinePoll<InsertBlockAt> {
+                        pub fn plot(self, result: <GetBalancesAt as Machine>::Out) -> MachinePoll<InsertBlockAt> {
                             let Self { block, now, step_size } = self;
                             let (balances, blocks_count) = match result {
                                 Ok((balances, blocks_count)) => (balances, blocks_count),

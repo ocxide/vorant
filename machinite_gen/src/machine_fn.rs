@@ -3,11 +3,17 @@ use quote::{format_ident, quote};
 use syn::{Expr, Ident, ItemFn, Pat, Stmt, Token, Type, spanned::Spanned};
 
 pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::Error> {
-    let mut output = TokenStream::new();
-
     let machine_ident: Ident = syn::parse2(attr)?;
+    let fn_ident: Ident = item_fn.sig.ident;
+    let vis = item_fn.vis;
+    let return_ty = match item_fn.sig.output {
+        syn::ReturnType::Default => syn::parse_quote! { () },
+        syn::ReturnType::Type(_, ty) => *ty,
+    };
 
-    let mut args: Vec<_> = item_fn
+    let mut yield_resumes: Vec<Type> = vec![syn::parse_quote! { () }];
+
+    let args: Vec<_> = item_fn
         .sig
         .inputs
         .into_iter()
@@ -39,7 +45,42 @@ pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::E
         })
         .collect::<Result<_, _>>()?;
 
-    let mut incoming_stmts = item_fn.block.stmts.into_iter();
+    let machine_innner = top_yields(
+        &mut yield_resumes,
+        &machine_ident,
+        args,
+        item_fn.block.stmts,
+    )?;
+
+    let yield_members = yield_resumes.into_iter().enumerate().map(|(i, ty)| {
+        let ident = format_ident!("Yield{}", i);
+        quote! { #ident(#fn_ident::#ident, #ty) }
+    });
+
+    Ok(quote! {
+        #vis enum #machine_ident {
+            #(#yield_members),*
+        }
+
+        #vis mod #fn_ident {
+            impl machinite::Machine for #machine_ident {
+                type Out = #return_ty;
+            }
+
+            #machine_innner
+        }
+    })
+}
+
+fn top_yields(
+    yield_resumes: &mut Vec<Type>,
+    machine_ident: &Ident,
+    mut args: Vec<(Option<Token![mut]>, Ident, Type)>,
+    incoming_stmts: Vec<Stmt>,
+) -> Result<TokenStream, syn::Error> {
+    let mut output = TokenStream::new();
+
+    let mut incoming_stmts = incoming_stmts.into_iter();
     let mut stmts = vec![];
 
     let mut yield_point = None;
@@ -82,6 +123,8 @@ pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::E
                     yield_point.ty,
                 ));
 
+                yield_resumes.push(*yield_point.expr.1.ty);
+
                 YieldPointReturn::Yield {
                     variant: format_ident!("Yield{}", yield_idx + 1),
                     fields,
@@ -116,7 +159,7 @@ pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::E
                 .map(|(mutability, ident, ty)| (*mutability, ident, ty)),
             yield_idx,
             (&resume_pat, &resume_ty),
-            &machine_ident,
+            machine_ident,
             yield_point_return,
         ));
 
