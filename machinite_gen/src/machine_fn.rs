@@ -92,26 +92,22 @@ fn top_yields(
 
     let mut incoming_stmts = incoming_stmts.into_iter();
 
-    let mut current_point = PointDef::Yield(crate::yield_points::YieldPoint {
-        save: crate::save::PointSave {
+    let mut current_point = PointDef::Yield(crate::yield_points::YieldPoint::new(
+        crate::save::PointSave {
             items: args
                 .into_iter()
                 .map(|(mutability, ident, ty)| crate::save::PointSaveItem {
                     mutability,
                     ident,
-                    _colon_token: syn::parse_quote! { : },
+                    _colon_token: Default::default(),
                     ty,
                 })
                 .collect(),
         },
-        _let_token: syn::parse_quote! { let },
-        pat: syn::parse_quote! { _ },
-        _colon_token: syn::parse_quote! { : },
-        ty: syn::parse_quote! { () },
-        _eq_token: syn::parse_quote! { = },
-        _yield_token: syn::parse_quote! { yield },
-        expr: syn::parse_quote! { () as () },
-    });
+        syn::parse_quote! { _ },
+        syn::parse_quote! { () },
+        (syn::parse_quote! { () }, syn::parse_quote! {()}),
+    ));
 
     while incoming_stmts.len() > 0 {
         let body = PointBody::parse(&mut incoming_stmts)?;
@@ -120,10 +116,10 @@ fn top_yields(
         output.extend(tokens);
 
         match body.end {
-            YieldPointReturn::Yield(point) => {
+            PointReturn::Yield(point) => {
                 current_point = PointDef::Yield(point);
             }
-            YieldPointReturn::End(_) => break,
+            PointReturn::End(_) => break,
         }
     }
 
@@ -134,7 +130,7 @@ pub enum PointDef {
     Yield(crate::yield_points::YieldPoint),
 }
 
-pub enum YieldPointReturn {
+pub enum PointReturn {
     End(Expr),
     Yield(crate::yield_points::YieldPoint),
 }
@@ -143,11 +139,11 @@ pub fn expand_point(
     ctx: &mut Ctx,
     current_point: PointDef,
     stmts: Vec<Stmt>,
-    point_return: &YieldPointReturn,
+    point_return: &PointReturn,
 ) -> TokenStream {
     match current_point {
         PointDef::Yield(point) => {
-            crate::yield_points::expand_yield(ctx, &point, stmts.into_iter(), point_return)
+            crate::yield_points::expand(ctx, &point, stmts.into_iter(), point_return)
         }
     }
 }
@@ -159,7 +155,7 @@ pub enum MachiniteStmt {
 
 pub struct PointBody {
     pub stmts: Vec<syn::Stmt>,
-    pub end: YieldPointReturn,
+    pub end: PointReturn,
 }
 
 impl PointBody {
@@ -182,7 +178,7 @@ impl PointBody {
         }
 
         let end = match point_end {
-            Some(MachiniteStmt::Yield(yield_point)) => YieldPointReturn::Yield(yield_point),
+            Some(MachiniteStmt::Yield(yield_point)) => PointReturn::Yield(yield_point),
 
             Some(MachiniteStmt::Stmt(stmt)) => match stmt {
                 syn::Stmt::Expr(syn::Expr::Return(syn::ExprReturn { expr, .. }), _) => {
@@ -191,18 +187,18 @@ impl PointBody {
                         None => syn::parse_quote! { () },
                     };
 
-                    YieldPointReturn::End(expr)
+                    PointReturn::End(expr)
                 }
 
-                syn::Stmt::Expr(expr, None) => YieldPointReturn::End(expr),
+                syn::Stmt::Expr(expr, None) => PointReturn::End(expr),
 
                 _ => {
                     stmts.push(stmt);
-                    YieldPointReturn::End(syn::parse_quote! { () })
+                    PointReturn::End(syn::parse_quote! { () })
                 }
             },
 
-            None => YieldPointReturn::End(syn::parse_quote! { () }),
+            None => PointReturn::End(syn::parse_quote! { () }),
         };
 
         Ok(Self { stmts, end })
@@ -211,11 +207,8 @@ impl PointBody {
 
 fn parse_stmt(stmt: syn::Stmt) -> Result<MachiniteStmt, syn::Error> {
     let stmt = match stmt {
-        syn::Stmt::Local(syn::Local {
-            init: Some(syn::LocalInit { ref expr, .. }),
-            ..
-        }) if matches!(&**expr, syn::Expr::Yield(_)) => {
-            MachiniteStmt::Yield(crate::yield_points::parse_stmt(stmt)?)
+        syn::Stmt::Local(local) if crate::yield_points::YieldPoint::can_from(&local) => {
+            MachiniteStmt::Yield(local.try_into()?)
         }
 
         _ => MachiniteStmt::Stmt(stmt),
