@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Expr, Ident, ItemFn, Pat, Stmt, Token, Type, spanned::Spanned};
 
-use crate::yield_points::YieldPoint;
+use crate::{loop_points::LoopPoint, yield_points::YieldPoint};
 
 pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::Error> {
     let machine_ident: Ident = syn::parse2(attr)?;
@@ -109,10 +109,10 @@ fn top_yields(
         (syn::parse_quote! { () }, syn::parse_quote! {()}),
     ));
 
-    while incoming_stmts.len() > 0 {
+    loop {
         let body = PointBody::parse(&mut incoming_stmts)?;
 
-        let tokens = expand(ctx, current_point, Stmts(body.stmts), body.end.as_ref());
+        let tokens = expand(ctx, current_point, body.stmts, body.end.as_ref());
         output.extend(tokens);
 
         if let Some(def) = body.end {
@@ -127,12 +127,14 @@ fn top_yields(
 
 pub enum PointDef {
     Yield(crate::yield_points::YieldPoint),
+    Loop(crate::loop_points::LoopPoint),
 }
 
 impl PointDef {
     pub fn expand_construct(&self, ctx: &Ctx) -> TokenStream {
         match self {
             PointDef::Yield(point) => point.expand_construct(ctx),
+            PointDef::Loop(point) => point.expand_construct(ctx),
         }
     }
 }
@@ -142,9 +144,13 @@ pub fn expand(
     current_point: PointDef,
     stmts: Stmts,
     next_point: Option<&PointDef>,
-) -> TokenStream {
+) -> Result<TokenStream, syn::Error> {
     match current_point {
-        PointDef::Yield(point) => crate::yield_points::expand(ctx, &point, stmts, next_point),
+        PointDef::Yield(point) => Ok(crate::yield_points::expand(ctx, &point, stmts, next_point)),
+        PointDef::Loop(point) => {
+            dbg!("expanding loop");
+point.expand(ctx, stmts, next_point)
+        }
     }
 }
 
@@ -178,6 +184,7 @@ impl Stmts {
 
 pub enum ParsedStmt {
     Yield(YieldPoint),
+    Loop(LoopPoint),
     Stmt(Stmt),
 }
 
@@ -187,7 +194,7 @@ pub enum NormalStmt {
 }
 
 pub struct PointBody {
-    pub stmts: Vec<NormalStmt>,
+    pub stmts: Stmts,
     pub end: Option<PointDef>,
 }
 
@@ -205,6 +212,10 @@ impl PointBody {
                     expr.map(|expr| *expr).unwrap_or(syn::parse_quote! { () }),
                 )),
                 ParsedStmt::Stmt(stmt) => stmts.push(NormalStmt::Stmt(stmt)),
+                ParsedStmt::Loop(point) => {
+                    end = Some(PointDef::Loop(point));
+                    break;
+                }
                 ParsedStmt::Yield(point) => {
                     end = Some(PointDef::Yield(point));
                     break;
@@ -212,7 +223,10 @@ impl PointBody {
             }
         }
 
-        Ok(Self { stmts, end })
+        Ok(Self {
+            stmts: Stmts(stmts),
+            end,
+        })
     }
 }
 
@@ -220,6 +234,10 @@ fn parse_stmt(stmt: syn::Stmt) -> Result<ParsedStmt, syn::Error> {
     let stmt = match stmt {
         syn::Stmt::Local(local) if crate::yield_points::YieldPoint::can_from(&local) => {
             ParsedStmt::Yield(local.try_into()?)
+        }
+
+        syn::Stmt::Expr(syn::Expr::Loop(loop_), _) if crate::loop_points::LoopPoint::can_from(&loop_) => {
+            ParsedStmt::Loop(loop_.try_into()?) 
         }
 
         _ => ParsedStmt::Stmt(stmt),

@@ -133,8 +133,10 @@ mod tests {
     fn accumulator() {
         let input: ItemFn = parse_quote!(
             fn accumulator(balances: BalanceSet) -> Result<BalanceSet, BlockError> {
-                while save! { balances: BalanceSet } {
-                    let next: Option<Block> = yield (save! { mut balances: BalanceSet }, () as ());
+                #[machinite::save { balances: BalanceSet }]
+                loop {
+                    #[machinite::save { balances: BalanceSet }]
+                    let next: Option<Block> = yield () as ();
 
                     let Some(block) = next else {
                         return Ok(balances);
@@ -144,7 +146,7 @@ mod tests {
                         Ok(balances_) => balances_,
                         Err(e) => return Err(e),
                     };
-                }
+                };
             }
         );
         let attr: TokenStream = syn::parse_quote!(Accumulator);
@@ -168,8 +170,8 @@ mod tests {
                     }
 
                     impl Loop0 {
-                        pub fn plot(self) -> MachinePoll<Accumulator> {
-                            MachinePoll::Yield(Accumulator::Yield0(Yield0 { loop0: self }, ()))
+                        pub fn plot_start(self) -> MachinePoll<Accumulator> {
+                            return MachinePoll::Yield(Accumulator::Yield0(Yield0 { loop0: self }, ()));
                         }
                     }
 
@@ -190,7 +192,7 @@ mod tests {
                                 Err(e) => return MachinePoll::End(Err(e)),
                             };
 
-                            Loop0 { balances }.plot()
+                            Loop0 { balances }.plot_start()
                         }
                     }
                 }

@@ -1,8 +1,11 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{Block, Ident, Stmt, spanned::Spanned};
+use syn::{Block, spanned::Spanned};
 
-use crate::save::PointSave;
+use crate::{
+    machine_fn::{Ctx, PointBody, PointDef, Stmts},
+    save::PointSave,
+};
 
 pub struct LoopPoint {
     save: PointSave,
@@ -35,26 +38,54 @@ impl TryFrom<syn::ExprLoop> for LoopPoint {
     }
 }
 
-pub fn expand(
-    loop_idx: usize,
-    machine_ident: &Ident,
-    point: LoopPoint,
-    stmts: impl Iterator<Item = Stmt>,
-) -> TokenStream {
-    let ident = format_ident!("Loop{loop_idx}");
-    let fields_def = point.save.expand_def();
-    let fields_destructure = point.save.expand_destructure();
+impl LoopPoint {
+    pub fn expand(
+        self,
+        ctx: &mut Ctx,
+        rest: Stmts,
+        next: Option<&PointDef>,
+    ) -> Result<TokenStream, syn::Error> {
+        let ident = format_ident!("Loop{}", ctx.loop_idx);
+        let machine_ident = &ctx.machine_ident;
+        let fields_def = self.save.expand_def();
+        let destruct_fields = self.save.expand_destructure();
 
-    quote! {
-        pub struct #ident {
-            #fields_def
-        }
+        let mut stmts = self.block.stmts.into_iter();
+        let body = PointBody::parse(&mut stmts)?;
 
-        impl #ident {
-            pub fn plot_start(self) -> MachinePoll<#machine_ident> {
-                let Self { #fields_destructure } = self;
+        let end = body.end.map(|end| end.expand_construct(ctx));
+        let body = body.stmts.expand(ctx, end.is_some());
+
+        let next = next.map(|x| x.expand_construct(ctx));
+        let rest = rest.expand(ctx, next.is_some());
+
+        Ok(quote! {
+            pub struct #ident {
+                #fields_def
             }
-        }
+
+            impl #ident {
+                pub fn plot_start(self) -> MachinePoll<#machine_ident> {
+                    let Self { #destruct_fields } = self;
+
+                    #body
+
+                    #end
+                }
+
+                pub fn plot_end() -> MachinePoll<#machine_ident> {
+                    #rest
+                    #next
+                }
+            }
+        })
+    }
+
+    pub fn expand_construct(&self, ctx: &Ctx) -> TokenStream {
+        let ident = format_ident!("Loop{}", ctx.loop_idx);
+        let constructor = self.save.expand_constructor();
+
+        quote! { #ident { #constructor }.plot_start() }
     }
 }
 
