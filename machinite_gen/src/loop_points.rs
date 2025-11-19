@@ -58,7 +58,17 @@ impl LoopPoint {
         let body_stmts = body.stmts.expand(ctx, end.is_some());
 
         let points = if let Some(end) = body.end {
-            Some(crate::machine_fn::expand_all(ctx, end, stmts)?)
+            let prev = ctx.loop_scope.take();
+            ctx.loop_scope = Some(LoopScope {
+                ident: ident.clone(),
+                fields: self.save.items.iter().map(|x| &x.ident).cloned().collect(),
+            });
+
+            let tokens = crate::machine_fn::expand_all(ctx, end, stmts)?;
+
+            ctx.loop_scope = prev;
+
+            Some(tokens)
         } else {
             None
         };
@@ -98,4 +108,16 @@ impl LoopPoint {
     }
 }
 
-pub struct LoopScope {}
+pub struct LoopScope {
+    ident: syn::Ident,
+    fields: Vec<syn::Ident>,
+}
+
+impl LoopScope {
+    pub fn expand_construct(&self) -> TokenStream {
+        let ident = &self.ident;
+        let fields = &self.fields;
+
+        quote! { return #ident { #(#fields),* }.plot_start(); }
+    }
+}

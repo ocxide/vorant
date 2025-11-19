@@ -147,10 +147,7 @@ pub fn expand(
 ) -> Result<TokenStream, syn::Error> {
     match current_point {
         PointDef::Yield(point) => Ok(crate::yield_points::expand(ctx, &point, stmts, next_point)),
-        PointDef::Loop(point) => {
-            dbg!("expanding loop");
-            point.expand(ctx, stmts, next_point)
-        }
+        PointDef::Loop(point) => point.expand(ctx, stmts, next_point),
     }
 }
 
@@ -192,11 +189,21 @@ impl Stmts {
 
         let stmts = rest.iter_mut().map(handle);
 
-        let last = match (last, has_next) {
-            (NormalStmt::Stmt(syn::Stmt::Expr(expr, None)), false) => {
+        let last = match (ctx.loop_scope.as_ref(), last, has_next) {
+            (_, NormalStmt::Stmt(syn::Stmt::Expr(expr, None)), false) => {
                 quote! { return MachinePoll::End(#expr); }
             }
-            (stmt, _) => handle(stmt),
+
+            (Some(scope), stmt @ NormalStmt::Stmt(syn::Stmt::Expr(_, Some(_))), false) => {
+                let tokens = handle(stmt);
+                let scope_start = scope.expand_construct();
+
+                quote! {
+                    #tokens
+                    #scope_start
+                }
+            }
+            (_, stmt, _) => handle(stmt),
         };
 
         quote! {
