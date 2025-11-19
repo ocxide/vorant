@@ -13,8 +13,8 @@ pub fn machine(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 mod loop_points;
 mod machine_fn;
-mod yield_points;
 mod save;
+mod yield_points;
 
 #[cfg(test)]
 mod tests {
@@ -135,7 +135,7 @@ mod tests {
             fn accumulator(balances: BalanceSet) -> Result<BalanceSet, BlockError> {
                 #[machinite::save { balances: BalanceSet }]
                 loop {
-                    #[machinite::save { balances: BalanceSet }]
+                    #[machinite::save { mut balances: BalanceSet }]
                     let next: Option<Block> = yield () as ();
 
                     let Some(block) = next else {
@@ -143,10 +143,10 @@ mod tests {
                     };
 
                     balances = match balances.apply_many(block.operations.into_iter()) {
-                        Ok(balances_) => balances_,
+                        Ok(balances) => balances,
                         Err(e) => return Err(e),
                     };
-                };
+                }
             }
         );
         let attr: TokenStream = syn::parse_quote!(Accumulator);
@@ -156,30 +156,43 @@ mod tests {
         assert_eq!(
             output.to_string(),
             quote! {
-                pub enum Accumulator {
-                    Yield0(accumulator::Yield0, ())
-                }
-
-                impl machinite::Machine for Accumulator {
-                    type Out = Result<BalanceSet, BlockError>;
+                enum Accumulator {
+                    Yield0(accumulator::Yield0, ()),
+                    Yield1(accumulator::Yield1, ())
                 }
 
                 mod accumulator {
+                    impl machinite::Machine for Accumulator {
+                        type Out = Result<BalanceSet, BlockError>;
+                    }
+
+                    pub struct Yield0 {
+                        balances: BalanceSet
+                    }
+
+                    impl Yield0 {
+                        pub fn plot(self, _: ()) -> MachinePoll<Accumulator> {
+                            let Self { balances } = self;
+                            return Loop0 { balances }.plot_start();
+                        }
+                    }
+
                     pub struct Loop0 {
-                        balances: BalanceSet,
+                        balances: BalanceSet
                     }
 
                     impl Loop0 {
                         pub fn plot_start(self) -> MachinePoll<Accumulator> {
-                            return MachinePoll::Yield(Accumulator::Yield0(Yield0 { loop0: self }, ()));
+                            let Self { balances } = self;
+                            return MachinePoll::Yield(Accumulator::Yield1(Yield1 { balances }, ()));
                         }
                     }
 
-                    pub struct Yield0 {
-                        balances: BalanceSet,
+                    pub struct Yield1 {
+                        balances: BalanceSet
                     }
 
-                    impl Yield0 {
+                    impl Yield1 {
                         pub fn plot(self, next: Option<Block>) -> MachinePoll<Accumulator> {
                             let Self { mut balances } = self;
 
@@ -187,16 +200,17 @@ mod tests {
                                 return MachinePoll::End(Ok(balances));
                             };
 
-                            let balances = match self.balances.apply_many(block.operations.into_iter()) {
+                            balances = match balances.apply_many(block.operations.into_iter()) {
                                 Ok(balances) => balances,
                                 Err(e) => return MachinePoll::End(Err(e)),
                             };
 
-                            Loop0 { balances }.plot_start()
+                            return Loop0 { balances }.plot_start();
                         }
                     }
                 }
-            }.to_string()
+            }
+            .to_string()
         );
     }
 
@@ -208,12 +222,11 @@ mod tests {
                 now: Timestamp,
                 step_size: usize,
             ) -> Result<(), BlockError> {
-                let out: <GetBalancesAt as Machine>::Out = yield (
-                    save! { block: Block, now: Timestamp, step_size: usize },
-                    GetBalancesAt::new(now) as GetBalancesAt,
-                );
+                #[machinite::save { block: Block, now: Timestamp, step_size: usize }]
+                let out: <GetBalancesAt as Machine>::Out =
+                    yield GetBalancesAt::new(now) as GetBalancesAt;
 
-                let (balances, blocks_count) = match result {
+                let (balances, blocks_count) = match out {
                     Ok((balances, blocks_count)) => (balances, blocks_count),
                     Err(e) => return Err(e),
                 };
@@ -223,13 +236,12 @@ mod tests {
                     Err(e) => return Err(e),
                 };
 
+                #[machinite::save {}]
                 let result: Result<BalanceSet, BlockError> = yield (
-                    save! {},
-                    (
-                        BlocksRebuilder::new(balances, step_size, blocks_count.unwrap_or(0)),
-                        now..,
-                    ) as (BlocksRebuilder, RangeFrom<Timestamp>),
-                );
+                    BlocksRebuilder::new(balances, step_size, blocks_count.unwrap_or(0)),
+                    now..,
+                )
+                    as (BlocksRebuilder, RangeFrom<Timestamp>);
 
                 let _ = result?;
 
@@ -243,7 +255,7 @@ mod tests {
         assert_eq!(
             output.to_string(),
             quote! {
-                pub enum InsertBlockAt {
+                enum InsertBlockAt {
                     Yield0(insert_block_at::Yield0, ()),
                     Yield1(insert_block_at::Yield1, GetBalancesAt),
                     Yield2(
@@ -252,31 +264,34 @@ mod tests {
                     )
                 }
 
-                impl machinite::Machine for InsertBlockAt {
-                    type Out = Result<(), BlockError>;
-                }
-
                 mod insert_block_at {
+                    impl machinite::Machine for InsertBlockAt {
+                        type Out = Result<(), BlockError>;
+                    }
+
                     pub struct Yield0 {
                         block: Block,
                         now: Timestamp,
                         step_size: usize
                     }
+
                     impl Yield0 {
                         pub fn plot(self, _: ()) -> MachinePoll<InsertBlockAt> {
                             let Self { block, now, step_size } = self;
-                            MachinePoll::Yield(InsertBlockAt::Yield1(Yield1 { block, now, step_size }, GetBalancesAt::new(now)))
+                            return MachinePoll::Yield(InsertBlockAt::Yield1(Yield1 { block, now, step_size }, GetBalancesAt::new(now)));
                         }
                     }
+
                     pub struct Yield1 {
                         block: Block,
                         now: Timestamp,
                         step_size: usize
                     }
+
                     impl Yield1 {
-                        pub fn plot(self, result: <GetBalancesAt as Machine>::Out) -> MachinePoll<InsertBlockAt> {
+                        pub fn plot(self, out: <GetBalancesAt as Machine>::Out) -> MachinePoll<InsertBlockAt> {
                             let Self { block, now, step_size } = self;
-                            let (balances, blocks_count) = match result {
+                            let (balances, blocks_count) = match out {
                                 Ok((balances, blocks_count)) => (balances, blocks_count),
                                 Err(e) => return MachinePoll::End(Err(e)),
                             };
@@ -284,15 +299,18 @@ mod tests {
                                 Ok(balances) => balances,
                                 Err(e) => return MachinePoll::End(Err(e)),
                             };
-                            MachinePoll::Yield(InsertBlockAt::Yield2(Yield2 {}, (BlocksRebuilder::new(balances, step_size, blocks_count.unwrap_or(0)), now..,)))
+
+                            return MachinePoll::Yield(InsertBlockAt::Yield2(Yield2 {}, (BlocksRebuilder::new(balances, step_size, blocks_count.unwrap_or(0)), now..,)));
                         }
                     }
+
                     pub struct Yield2 {}
                     impl Yield2 {
                         pub fn plot(self, result: Result<BalanceSet, BlockError>) -> MachinePoll<InsertBlockAt> {
                             let Self {} = self;
                             let _ = result?;
-                            MachinePoll::End(Ok(()))
+
+                            return MachinePoll::End(Ok(()));
                         }
                     }
                 }

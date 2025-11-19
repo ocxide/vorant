@@ -42,10 +42,9 @@ impl LoopPoint {
     pub fn expand(
         self,
         ctx: &mut Ctx,
-        mut rest: Stmts,
-        next: Option<&PointDef>,
+        _rest: Stmts,
+        _next: Option<&PointDef>,
     ) -> Result<TokenStream, syn::Error> {
-        dbg!(ctx.yield_returns.len());
         let ident = format_ident!("Loop{}", ctx.loop_idx);
         let machine_ident = ctx.machine_ident.clone();
         let fields_def = self.save.expand_def();
@@ -73,8 +72,9 @@ impl LoopPoint {
             None
         };
 
-        let next = next.map(|x| x.expand_construct(ctx));
-        let rest = rest.expand(ctx, next.is_some());
+        // TODO: support next
+        // let next = next.map(|x| x.expand_construct(ctx));
+        // let rest = rest.expand(ctx, next.is_some());
 
         Ok(quote! {
             pub struct #ident {
@@ -89,11 +89,6 @@ impl LoopPoint {
 
                     #end
                 }
-
-                pub fn plot_end() -> MachinePoll<#machine_ident> {
-                    #rest
-                    #next
-                }
             }
 
             #points
@@ -104,7 +99,7 @@ impl LoopPoint {
         let ident = format_ident!("Loop{}", ctx.loop_idx);
         let constructor = self.save.expand_constructor();
 
-        quote! { #ident { #constructor }.plot_start() }
+        quote! { return #ident { #constructor }.plot_start(); }
     }
 }
 

@@ -156,7 +156,11 @@ pub struct Stmts(Vec<NormalStmt>);
 impl Stmts {
     pub fn expand(&mut self, ctx: &Ctx, has_next: bool) -> TokenStream {
         let Some((last, rest)) = self.0.split_last_mut() else {
-            return TokenStream::new();
+            return match (&ctx.loop_scope, has_next) {
+                (_, true) => TokenStream::new(),
+                (Some(scope), false) => scope.expand_construct(),
+                _ => quote! { return MachinePoll::End(()); },
+            };
         };
 
         fn handle(stmt: &mut NormalStmt) -> TokenStream {
