@@ -92,23 +92,38 @@ fn top_yields(
 
     let mut incoming_stmts = incoming_stmts.into_iter();
 
-    let mut current_point = PointDef::Yield {
-        resume_pat: syn::parse_quote! { _ },
-        resume_ty: syn::parse_quote! { () },
-        fields: args,
-        yield_ty: syn::parse_quote! { () },
-    };
+    let mut current_point = PointDef::Yield(crate::yield_points::YieldPoint {
+        save: crate::save::PointSave {
+            items: args
+                .into_iter()
+                .map(|(mutability, ident, ty)| crate::save::PointSaveItem {
+                    mutability,
+                    ident,
+                    _colon_token: syn::parse_quote! { : },
+                    ty,
+                })
+                .collect(),
+        },
+        _let_token: syn::parse_quote! { let },
+        pat: syn::parse_quote! { _ },
+        _colon_token: syn::parse_quote! { : },
+        ty: syn::parse_quote! { () },
+        _eq_token: syn::parse_quote! { = },
+        _yield_token: syn::parse_quote! { yield },
+        expr: syn::parse_quote! { () as () },
+    });
 
     while incoming_stmts.len() > 0 {
-        let body = PointBody::parse(ctx, &mut incoming_stmts)?;
+        let body = PointBody::parse(&mut incoming_stmts)?;
 
-        let tokens = expand_point(ctx, current_point, body.stmts, body.end.0);
+        let tokens = expand_point(ctx, current_point, body.stmts, &body.end);
         output.extend(tokens);
 
-        if let Some(next_point_) = body.end.1 {
-            current_point = next_point_;
-        } else {
-            break;
+        match body.end {
+            YieldPointReturn::Yield(point) => {
+                current_point = PointDef::Yield(point);
+            }
+            YieldPointReturn::End(_) => break,
         }
     }
 
@@ -116,95 +131,23 @@ fn top_yields(
 }
 
 pub enum PointDef {
-    Yield {
-        resume_pat: Pat,
-        resume_ty: Type,
-        fields: Vec<(Option<Token![mut]>, Ident, Type)>,
-        yield_ty: Type,
-    },
+    Yield(crate::yield_points::YieldPoint),
 }
 
 pub enum YieldPointReturn {
     End(Expr),
-    Yield {
-        variant: Ident,
-        fields: Vec<Ident>,
-        yield_expr: Expr,
-    },
+    Yield(crate::yield_points::YieldPoint),
 }
 
 pub fn expand_point(
     ctx: &mut Ctx,
     current_point: PointDef,
     stmts: Vec<Stmt>,
-    point_return: YieldPointReturn,
+    point_return: &YieldPointReturn,
 ) -> TokenStream {
     match current_point {
-        PointDef::Yield {
-            resume_pat,
-            resume_ty,
-            fields,
-            yield_ty,
-        } => {
-            let tokens = expand_top_yield(
-                stmts.into_iter(),
-                fields
-                    .iter()
-                    .map(|(mutability, ident, ty)| (*mutability, ident, ty)),
-                ctx.yield_returns.len(),
-                (&resume_pat, &resume_ty),
-                &ctx.machine_ident,
-                point_return,
-            );
-
-            ctx.yield_returns.push(yield_ty);
-
-            tokens
-        }
-    }
-}
-
-fn expand_top_yield<'y>(
-    stmts: impl Iterator<Item = Stmt>,
-    fields: impl Iterator<Item = (Option<Token![mut]>, &'y Ident, &'y Type)> + Clone,
-    yield_idx: usize,
-    (resume_pat, resume_ty): (&Pat, &Type),
-    machine_ident: &Ident,
-    yield_point_return: YieldPointReturn,
-) -> TokenStream {
-    let ident = format_ident!("Yield{}", yield_idx);
-    let fields_def = fields.clone().map(|(_, ident, ty)| quote! { #ident: #ty });
-
-    let destruct_fields = fields.map(|(mutability, ident, _)| {
-        quote! {
-            #mutability #ident
-        }
-    });
-
-    let return_tokens = match yield_point_return {
-        YieldPointReturn::End(expr) => quote! { MachinePoll::End( #expr ) },
-        YieldPointReturn::Yield {
-            variant,
-            fields,
-            yield_expr,
-        } => {
-            quote! { MachinePoll::Yield(#machine_ident::#variant(#variant { #(#fields),* }, #yield_expr )) }
-        }
-    };
-
-    quote! {
-        pub struct #ident {
-            #(#fields_def),*
-        }
-
-        impl #ident {
-            pub fn plot(self, #resume_pat: #resume_ty) -> MachinePoll<#machine_ident> {
-                let Self { #(#destruct_fields),* } = self;
-
-                #(#stmts)*
-
-                #return_tokens
-            }
+        PointDef::Yield(point) => {
+            crate::yield_points::expand_yield(ctx, &point, stmts.into_iter(), point_return)
         }
     }
 }
@@ -216,14 +159,11 @@ pub enum MachiniteStmt {
 
 pub struct PointBody {
     pub stmts: Vec<syn::Stmt>,
-    pub end: (YieldPointReturn, Option<PointDef>),
+    pub end: YieldPointReturn,
 }
 
 impl PointBody {
-    pub fn parse(
-        ctx: &Ctx,
-        incoming_stmts: impl Iterator<Item = Stmt>,
-    ) -> Result<Self, syn::Error> {
+    pub fn parse(incoming_stmts: impl Iterator<Item = Stmt>) -> Result<Self, syn::Error> {
         let mut stmts = vec![];
         let mut point_end = None;
 
@@ -241,63 +181,31 @@ impl PointBody {
             point_end = stmts.pop().map(MachiniteStmt::Stmt);
         }
 
-        let (point_return, next_point) = match point_end {
-            Some(MachiniteStmt::Yield(yield_point)) => {
-                let return_yield = YieldPointReturn::Yield {
-                    variant: format_ident!("Yield{}", ctx.yield_returns.len() + 1),
-                    fields: yield_point
-                        .save
-                        .items
-                        .iter()
-                        .map(|item| item.ident.clone())
-                        .collect(),
-                    yield_expr: *yield_point.expr.expr,
-                };
+        let end = match point_end {
+            Some(MachiniteStmt::Yield(yield_point)) => YieldPointReturn::Yield(yield_point),
 
-                let next_point = PointDef::Yield {
-                    resume_pat: yield_point.pat,
-                    resume_ty: yield_point.ty,
-                    fields: yield_point
-                        .save
-                        .items
-                        .into_iter()
-                        .map(|item| (item.mutability, item.ident, item.ty))
-                        .collect(),
-                    yield_ty: *yield_point.expr.ty,
-                };
+            Some(MachiniteStmt::Stmt(stmt)) => match stmt {
+                syn::Stmt::Expr(syn::Expr::Return(syn::ExprReturn { expr, .. }), _) => {
+                    let expr = match expr {
+                        Some(expr) => *expr,
+                        None => syn::parse_quote! { () },
+                    };
 
-                (return_yield, Some(next_point))
-            }
+                    YieldPointReturn::End(expr)
+                }
 
-            Some(MachiniteStmt::Stmt(stmt)) => {
-                let point_return = match stmt {
-                    syn::Stmt::Expr(syn::Expr::Return(syn::ExprReturn { expr, .. }), _) => {
-                        let expr = match expr {
-                            Some(expr) => *expr,
-                            None => syn::parse_quote! { () },
-                        };
+                syn::Stmt::Expr(expr, None) => YieldPointReturn::End(expr),
 
-                        YieldPointReturn::End(expr)
-                    }
+                _ => {
+                    stmts.push(stmt);
+                    YieldPointReturn::End(syn::parse_quote! { () })
+                }
+            },
 
-                    syn::Stmt::Expr(expr, None) => YieldPointReturn::End(expr),
-
-                    _ => {
-                        stmts.push(stmt);
-                        YieldPointReturn::End(syn::parse_quote! { () })
-                    }
-                };
-
-                (point_return, None)
-            }
-
-            None => (YieldPointReturn::End(syn::parse_quote! { () }), None),
+            None => YieldPointReturn::End(syn::parse_quote! { () }),
         };
 
-        Ok(Self {
-            stmts,
-            end: (point_return, next_point),
-        })
+        Ok(Self { stmts, end })
     }
 }
 
@@ -314,51 +222,4 @@ fn parse_stmt(stmt: syn::Stmt) -> Result<MachiniteStmt, syn::Error> {
     };
 
     Ok(stmt)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn expand_top_yields_simple() {
-        let yields = vec![(
-            Some(Default::default()),
-            format_ident!("a"),
-            syn::parse_quote!(u32),
-        )];
-
-        let top_yields = super::expand_top_yield(
-            vec![syn::parse_quote!(a += 1;)].into_iter(),
-            yields.iter().map(|(y, i, t)| (*y, i, t)),
-            0,
-            (&syn::parse_quote!(b), &syn::parse_quote!(Resume)),
-            &syn::Ident::new("Machine", proc_macro2::Span::call_site()),
-            YieldPointReturn::Yield {
-                variant: format_ident!("Yield1"),
-                fields: vec![syn::parse_quote!(a)],
-                yield_expr: syn::parse_quote!(0),
-            },
-        );
-
-        assert_eq!(
-            top_yields.to_string(),
-            quote! {
-                pub struct Yield0 {
-                    a: u32
-                }
-
-                impl Yield0 {
-                    pub fn plot(self, b: Resume) -> MachinePoll<Machine> {
-                        let Self { mut a } = self;
-
-                        a += 1;
-
-                        MachinePoll::Yield(Machine::Yield1(Yield1 { a }, 0))
-                    }
-                }
-            }
-            .to_string()
-        );
-    }
 }

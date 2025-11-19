@@ -1,6 +1,11 @@
+use proc_macro2::TokenStream;
+use quote::format_ident;
 use syn::{Expr, Pat, PatType, Token, Type, spanned::Spanned};
 
-use crate::save::PointSave;
+use crate::{
+    machine_fn::{Ctx, YieldPointReturn},
+    save::PointSave,
+};
 
 pub struct YieldPoint {
     pub save: PointSave,
@@ -68,4 +73,49 @@ pub fn parse_stmt(stmt: syn::Stmt) -> Result<YieldPoint, syn::Error> {
         _yield_token: yield_token,
         expr: cast,
     })
+}
+
+pub fn expand_yield<'y>(
+    ctx: &mut Ctx,
+    point: &YieldPoint,
+    stmts: impl Iterator<Item = syn::Stmt>,
+    point_end: &YieldPointReturn,
+) -> TokenStream {
+    let machine_ident = &ctx.machine_ident;
+    let ident = format_ident!("Yield{}", ctx.yield_returns.len());
+
+    let fields_def = point.save.expand_def();
+    let destruct_fields = point.save.expand_destructure();
+
+    let resume_pat = &point.pat;
+    let resume_ty = &point.ty;
+
+    let return_tokens = match point_end {
+        YieldPointReturn::End(expr) => quote::quote! { MachinePoll::End( #expr ) },
+        YieldPointReturn::Yield(point) => {
+            let ident = format_ident!("Yield{}", ctx.yield_returns.len() + 1);
+            let constructor = point.save.expand_constructor();
+            let yield_expr = &point.expr.expr;
+
+            quote::quote! { MachinePoll::Yield(#machine_ident::#ident(#ident { #constructor }, #yield_expr )) }
+        }
+    };
+
+    ctx.yield_returns.push((*point.expr.ty).clone());
+
+    quote::quote! {
+        pub struct #ident {
+            #fields_def
+        }
+
+        impl #ident {
+            pub fn plot(self, #resume_pat: #resume_ty) -> MachinePoll<#machine_ident> {
+                let Self { #destruct_fields } = self;
+
+                #(#stmts)*
+
+                #return_tokens
+            }
+        }
+    }
 }

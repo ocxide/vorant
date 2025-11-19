@@ -22,12 +22,16 @@ impl PointSave {
         })
     }
 
-    pub fn expand_def(&self) -> ExpandDef<'_> {
+    pub const fn expand_def(&self) -> ExpandDef<'_> {
         ExpandDef(self)
     }
 
-    pub fn expand_destructure(&self) -> ExpandDestructure<'_> {
+    pub const fn expand_destructure(&self) -> ExpandDestructure<'_> {
         ExpandDestructure(self)
+    }
+
+    pub const fn expand_constructor(&self) -> ExpandConstructor<'_> {
+        ExpandConstructor(self)
     }
 }
 
@@ -60,6 +64,16 @@ impl<'p> quote::ToTokens for ExpandDestructure<'p> {
                 #mutability #ident
             }
         });
+
+        tokens.extend(quote! { #(#fields),* });
+    }
+}
+
+pub struct ExpandConstructor<'p>(&'p PointSave);
+
+impl<'p> quote::ToTokens for ExpandConstructor<'p> {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let fields = self.0.items.iter().map(|item| &item.ident);
 
         tokens.extend(quote! { #(#fields),* });
     }
