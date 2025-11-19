@@ -77,7 +77,7 @@ mod tests {
                     impl Yield0 {
                         pub fn plot(self, _: ()) -> MachinePoll<GetBalancesAt> {
                             let Self { now } = self;
-                            MachinePoll::Yield(GetBalancesAt::Yield1(Yield1 { now }, now))
+                            return MachinePoll::Yield(GetBalancesAt::Yield1(Yield1 { now }, now));
                         }
                     }
 
@@ -101,10 +101,10 @@ mod tests {
                                 None => (BalanceSet::default(), None, GetBlocks::Until(..=now)),
                             };
 
-                            MachinePoll::Yield(GetBalancesAt::Yield2(
+                            return MachinePoll::Yield(GetBalancesAt::Yield2(
                                 Yield2 { snapshot },
                                 (Accumulator { balances }, range)
-                            ))
+                            ));
                         }
                     }
 
@@ -121,7 +121,7 @@ mod tests {
                                 Ok(balances) => Ok((balances, snapshot)),
                             };
 
-                            MachinePoll::End(result)
+                            return MachinePoll::End(result);
                         }
                     }
                 }

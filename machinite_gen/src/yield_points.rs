@@ -1,9 +1,9 @@
 use proc_macro2::TokenStream;
-use quote::format_ident;
+use quote::{format_ident, quote};
 use syn::{Expr, Pat, PatType, Token, Type, spanned::Spanned};
 
 use crate::{
-    machine_fn::{Ctx, PointReturn},
+    machine_fn::{Ctx, NormalStmt, PointDef, Stmts},
     save::PointSave,
 };
 
@@ -44,6 +44,17 @@ impl YieldPoint {
                     ..
                 } if matches!(&**expr, syn::Expr::Yield(_))
         )
+    }
+
+    pub fn expand_construct(&self, ctx: &Ctx) -> TokenStream {
+        let machine_ident = &ctx.machine_ident;
+        let ident = format_ident!("Yield{}", ctx.yield_returns.len() + 1);
+        let yield_expr = &self.expr.expr;
+        let construct_expr = self.save.expand_constructor();
+
+        quote! {
+            return MachinePoll::Yield(#machine_ident::#ident(#ident { #construct_expr }, #yield_expr));
+        }
     }
 }
 
@@ -111,8 +122,8 @@ impl TryFrom<syn::Local> for YieldPoint {
 pub fn expand(
     ctx: &mut Ctx,
     point: &YieldPoint,
-    stmts: impl Iterator<Item = syn::Stmt>,
-    point_end: &PointReturn,
+    stmts: Stmts,
+    next_point: Option<&PointDef>,
 ) -> TokenStream {
     let machine_ident = &ctx.machine_ident;
     let ident = format_ident!("Yield{}", ctx.yield_returns.len());
@@ -123,14 +134,11 @@ pub fn expand(
     let resume_pat = &point.pat;
     let resume_ty = &point.ty;
 
-    let return_tokens = match point_end {
-        PointReturn::End(expr) => quote::quote! { MachinePoll::End( #expr ) },
-        PointReturn::Yield(point) => expand_return(ctx, point),
-    };
+    let end = next_point.map(|x| x.expand_construct(ctx));
 
-    ctx.yield_returns.push((*point.expr.ty).clone());
+    let body = stmts.expand(ctx, end.is_some());
 
-    quote::quote! {
+    let out = quote::quote! {
         pub struct #ident {
             #fields_def
         }
@@ -139,20 +147,14 @@ pub fn expand(
             pub fn plot(self, #resume_pat: #resume_ty) -> MachinePoll<#machine_ident> {
                 let Self { #destruct_fields } = self;
 
-                #(#stmts)*
+                #body
 
-                #return_tokens
+                #end
             }
         }
-    }
-}
+    };
 
-pub fn expand_return(ctx: &Ctx, point: &YieldPoint) -> TokenStream {
-    let machine_ident = &ctx.machine_ident;
+    ctx.yield_returns.push((*point.expr.ty).clone());
 
-    let ident = format_ident!("Yield{}", ctx.yield_returns.len() + 1);
-    let constructor = point.save.expand_constructor();
-    let yield_expr = &point.expr.expr;
-
-    quote::quote! { MachinePoll::Yield(#machine_ident::#ident(#ident { #constructor }, #yield_expr )) }
+    out
 }

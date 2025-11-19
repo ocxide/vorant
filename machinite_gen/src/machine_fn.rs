@@ -112,14 +112,13 @@ fn top_yields(
     while incoming_stmts.len() > 0 {
         let body = PointBody::parse(&mut incoming_stmts)?;
 
-        let tokens = expand_point(ctx, current_point, body.stmts, &body.end);
+        let tokens = expand(ctx, current_point, Stmts(body.stmts), body.end.as_ref());
         output.extend(tokens);
 
-        match body.end {
-            PointReturn::Yield(point) => {
-                current_point = PointDef::Yield(point);
-            }
-            PointReturn::End(_) => break,
+        if let Some(def) = body.end {
+            current_point = def;
+        } else {
+            break;
         }
     }
 
@@ -130,88 +129,100 @@ pub enum PointDef {
     Yield(crate::yield_points::YieldPoint),
 }
 
-pub enum PointReturn {
-    End(Expr),
-    Yield(crate::yield_points::YieldPoint),
-}
-
-pub fn expand_point(
-    ctx: &mut Ctx,
-    current_point: PointDef,
-    stmts: Vec<Stmt>,
-    point_return: &PointReturn,
-) -> TokenStream {
-    match current_point {
-        PointDef::Yield(point) => {
-            crate::yield_points::expand(ctx, &point, stmts.into_iter(), point_return)
+impl PointDef {
+    pub fn expand_construct(&self, ctx: &Ctx) -> TokenStream {
+        match self {
+            PointDef::Yield(point) => point.expand_construct(ctx),
         }
     }
 }
 
-pub enum MachiniteStmt {
+pub fn expand(
+    ctx: &mut Ctx,
+    current_point: PointDef,
+    stmts: Stmts,
+    next_point: Option<&PointDef>,
+) -> TokenStream {
+    match current_point {
+        PointDef::Yield(point) => crate::yield_points::expand(ctx, &point, stmts, next_point),
+    }
+}
+
+pub struct Stmts(Vec<NormalStmt>);
+
+impl Stmts {
+    pub fn expand(&self, ctx: &Ctx, has_next: bool) -> TokenStream {
+        let Some((last, rest)) = self.0.split_last() else {
+            return TokenStream::new();
+        };
+
+        let stmts = rest.iter().map(|stmt| match stmt {
+            NormalStmt::Stmt(stmt) => quote! { #stmt },
+            NormalStmt::Return(expr) => quote! { return MachinePoll::End(#expr); },
+        });
+
+        let last = match (last, has_next) {
+            (NormalStmt::Stmt(syn::Stmt::Expr(expr, None)), false) => {
+                quote! { return MachinePoll::End(#expr); }
+            }
+            (NormalStmt::Stmt(stmt), _) => quote! { #stmt },
+            (NormalStmt::Return(expr), _) => quote! { return MachinePoll::End(#expr); },
+        };
+
+        quote! {
+            #(#stmts)*
+            #last
+        }
+    }
+}
+
+pub enum ParsedStmt {
     Yield(YieldPoint),
     Stmt(Stmt),
 }
 
+pub enum NormalStmt {
+    Stmt(Stmt),
+    Return(Expr),
+}
+
 pub struct PointBody {
-    pub stmts: Vec<syn::Stmt>,
-    pub end: PointReturn,
+    pub stmts: Vec<NormalStmt>,
+    pub end: Option<PointDef>,
 }
 
 impl PointBody {
     pub fn parse(incoming_stmts: impl Iterator<Item = Stmt>) -> Result<Self, syn::Error> {
         let mut stmts = vec![];
-        let mut point_end = None;
+        let mut end = None;
 
         for stmt in incoming_stmts {
             match parse_stmt(stmt)? {
-                MachiniteStmt::Stmt(stmt) => stmts.push(stmt),
-                stmt => {
-                    point_end = Some(stmt);
+                ParsedStmt::Stmt(syn::Stmt::Expr(
+                    syn::Expr::Return(syn::ExprReturn { expr, .. }),
+                    _,
+                )) => stmts.push(NormalStmt::Return(
+                    expr.map(|expr| *expr).unwrap_or(syn::parse_quote! { () }),
+                )),
+                ParsedStmt::Stmt(stmt) => stmts.push(NormalStmt::Stmt(stmt)),
+                ParsedStmt::Yield(point) => {
+                    end = Some(PointDef::Yield(point));
                     break;
                 }
             }
         }
 
-        if point_end.is_none() {
-            point_end = stmts.pop().map(MachiniteStmt::Stmt);
-        }
-
-        let end = match point_end {
-            Some(MachiniteStmt::Yield(yield_point)) => PointReturn::Yield(yield_point),
-
-            Some(MachiniteStmt::Stmt(stmt)) => match stmt {
-                syn::Stmt::Expr(syn::Expr::Return(syn::ExprReturn { expr, .. }), _) => {
-                    let expr = match expr {
-                        Some(expr) => *expr,
-                        None => syn::parse_quote! { () },
-                    };
-
-                    PointReturn::End(expr)
-                }
-
-                syn::Stmt::Expr(expr, None) => PointReturn::End(expr),
-
-                _ => {
-                    stmts.push(stmt);
-                    PointReturn::End(syn::parse_quote! { () })
-                }
-            },
-
-            None => PointReturn::End(syn::parse_quote! { () }),
-        };
-
         Ok(Self { stmts, end })
     }
 }
 
-fn parse_stmt(stmt: syn::Stmt) -> Result<MachiniteStmt, syn::Error> {
+fn parse_stmt(stmt: syn::Stmt) -> Result<ParsedStmt, syn::Error> {
     let stmt = match stmt {
         syn::Stmt::Local(local) if crate::yield_points::YieldPoint::can_from(&local) => {
-            MachiniteStmt::Yield(local.try_into()?)
+            ParsedStmt::Yield(local.try_into()?)
         }
 
-        _ => MachiniteStmt::Stmt(stmt),
+        _ => ParsedStmt::Stmt(stmt),
     };
 
     Ok(stmt)
