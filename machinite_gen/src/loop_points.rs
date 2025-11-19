@@ -45,6 +45,7 @@ impl LoopPoint {
         mut rest: Stmts,
         next: Option<&PointDef>,
     ) -> Result<TokenStream, syn::Error> {
+        dbg!(ctx.yield_returns.len());
         let ident = format_ident!("Loop{}", ctx.loop_idx);
         let machine_ident = ctx.machine_ident.clone();
         let fields_def = self.save.expand_def();

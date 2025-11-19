@@ -48,7 +48,7 @@ impl YieldPoint {
 
     pub fn expand_construct(&self, ctx: &Ctx) -> TokenStream {
         let machine_ident = &ctx.machine_ident;
-        let ident = format_ident!("Yield{}", ctx.yield_returns.len() + 1);
+        let ident = format_ident!("Yield{}", ctx.yield_returns.len());
         let yield_expr = &self.expr.expr;
         let construct_expr = self.save.expand_constructor();
 
@@ -134,6 +134,7 @@ pub fn expand(
     let resume_pat = &point.pat;
     let resume_ty = &point.ty;
 
+    ctx.yield_returns.push((*point.expr.ty).clone());
     let end = next_point.map(|x| x.expand_construct(ctx));
 
     let body = stmts.expand(ctx, end.is_some());
@@ -153,8 +154,6 @@ pub fn expand(
             }
         }
     };
-
-    ctx.yield_returns.push((*point.expr.ty).clone());
 
     out
 }
