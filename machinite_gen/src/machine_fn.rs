@@ -16,7 +16,7 @@ pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::E
     let mut ctx = Ctx {
         machine_ident,
         loop_idx: 0,
-        loop_ctx: None,
+        loop_scope: None,
         yield_returns: vec![],
     };
 
@@ -80,7 +80,7 @@ pub struct Ctx {
     pub machine_ident: Ident,
     pub yield_returns: Vec<Type>,
     pub loop_idx: usize,
-    pub loop_ctx: Option<crate::loop_points::LoopScope>,
+    pub loop_scope: Option<crate::loop_points::LoopScope>,
 }
 
 fn top_yields(
@@ -157,22 +157,46 @@ pub fn expand(
 pub struct Stmts(Vec<NormalStmt>);
 
 impl Stmts {
-    pub fn expand(&self, ctx: &Ctx, has_next: bool) -> TokenStream {
-        let Some((last, rest)) = self.0.split_last() else {
+    pub fn expand(&mut self, ctx: &Ctx, has_next: bool) -> TokenStream {
+        let Some((last, rest)) = self.0.split_last_mut() else {
             return TokenStream::new();
         };
 
-        let stmts = rest.iter().map(|stmt| match stmt {
-            NormalStmt::Stmt(stmt) => quote! { #stmt },
-            NormalStmt::Return(expr) => quote! { return MachinePoll::End(#expr); },
-        });
+        fn handle(stmt: &mut NormalStmt) -> TokenStream {
+            struct ReturnVisitor;
+
+            impl syn::visit_mut::VisitMut for ReturnVisitor {
+                fn visit_expr_return_mut(&mut self, i: &mut syn::ExprReturn) {
+                    let expr = i
+                        .expr
+                        .take()
+                        .map(|x| {
+                            syn::parse_quote!(
+                                MachinePoll::End(#x)
+                            )
+                        })
+                        .unwrap_or_else(|| syn::parse_quote!(MachinePoll::End(())));
+
+                    i.expr = Some(expr);
+                }
+            }
+
+            match stmt {
+                NormalStmt::Stmt(stmt) => {
+                    syn::visit_mut::visit_stmt_mut(&mut ReturnVisitor, stmt);
+                    quote! { #stmt }
+                }
+                NormalStmt::Return(expr) => quote! { return MachinePoll::End(#expr); },
+            }
+        }
+
+        let stmts = rest.iter_mut().map(handle);
 
         let last = match (last, has_next) {
             (NormalStmt::Stmt(syn::Stmt::Expr(expr, None)), false) => {
                 quote! { return MachinePoll::End(#expr); }
             }
-            (NormalStmt::Stmt(stmt), _) => quote! { #stmt },
-            (NormalStmt::Return(expr), _) => quote! { return MachinePoll::End(#expr); },
+            (stmt, _) => handle(stmt),
         };
 
         quote! {

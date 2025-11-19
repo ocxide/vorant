@@ -3,7 +3,7 @@ use quote::{format_ident, quote};
 use syn::{Expr, Pat, PatType, Token, Type, spanned::Spanned};
 
 use crate::{
-    machine_fn::{Ctx, NormalStmt, PointDef, Stmts},
+    machine_fn::{Ctx, PointDef, Stmts},
     save::PointSave,
 };
 
@@ -122,7 +122,7 @@ impl TryFrom<syn::Local> for YieldPoint {
 pub fn expand(
     ctx: &mut Ctx,
     point: &YieldPoint,
-    stmts: Stmts,
+    mut stmts: Stmts,
     next_point: Option<&PointDef>,
 ) -> TokenStream {
     let machine_ident = &ctx.machine_ident;

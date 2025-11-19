@@ -42,7 +42,7 @@ impl LoopPoint {
     pub fn expand(
         self,
         ctx: &mut Ctx,
-        rest: Stmts,
+        mut rest: Stmts,
         next: Option<&PointDef>,
     ) -> Result<TokenStream, syn::Error> {
         let ident = format_ident!("Loop{}", ctx.loop_idx);
@@ -51,7 +51,7 @@ impl LoopPoint {
         let destruct_fields = self.save.expand_destructure();
 
         let mut stmts = self.block.stmts.into_iter();
-        let body = PointBody::parse(&mut stmts)?;
+        let mut body = PointBody::parse(&mut stmts)?;
 
         let end = body.end.as_ref().map(|end| end.expand_construct(ctx));
         let body_stmts = body.stmts.expand(ctx, end.is_some());
