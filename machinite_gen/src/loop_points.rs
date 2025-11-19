@@ -46,15 +46,21 @@ impl LoopPoint {
         next: Option<&PointDef>,
     ) -> Result<TokenStream, syn::Error> {
         let ident = format_ident!("Loop{}", ctx.loop_idx);
-        let machine_ident = &ctx.machine_ident;
+        let machine_ident = ctx.machine_ident.clone();
         let fields_def = self.save.expand_def();
         let destruct_fields = self.save.expand_destructure();
 
         let mut stmts = self.block.stmts.into_iter();
         let body = PointBody::parse(&mut stmts)?;
 
-        let end = body.end.map(|end| end.expand_construct(ctx));
-        let body = body.stmts.expand(ctx, end.is_some());
+        let end = body.end.as_ref().map(|end| end.expand_construct(ctx));
+        let body_stmts = body.stmts.expand(ctx, end.is_some());
+
+        let points = if let Some(end) = body.end {
+            Some(crate::machine_fn::expand_all(ctx, end, stmts)?)
+        } else {
+            None
+        };
 
         let next = next.map(|x| x.expand_construct(ctx));
         let rest = rest.expand(ctx, next.is_some());
@@ -68,7 +74,7 @@ impl LoopPoint {
                 pub fn plot_start(self) -> MachinePoll<#machine_ident> {
                     let Self { #destruct_fields } = self;
 
-                    #body
+                    #body_stmts
 
                     #end
                 }
@@ -78,6 +84,8 @@ impl LoopPoint {
                     #next
                 }
             }
+
+            #points
         })
     }
 
@@ -89,4 +97,4 @@ impl LoopPoint {
     }
 }
 
-pub struct LoopCtx {}
+pub struct LoopScope {}

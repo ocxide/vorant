@@ -80,7 +80,7 @@ pub struct Ctx {
     pub machine_ident: Ident,
     pub yield_returns: Vec<Type>,
     pub loop_idx: usize,
-    pub loop_ctx: Option<crate::loop_points::LoopCtx>,
+    pub loop_ctx: Option<crate::loop_points::LoopScope>,
 }
 
 fn top_yields(
@@ -149,7 +149,7 @@ pub fn expand(
         PointDef::Yield(point) => Ok(crate::yield_points::expand(ctx, &point, stmts, next_point)),
         PointDef::Loop(point) => {
             dbg!("expanding loop");
-point.expand(ctx, stmts, next_point)
+            point.expand(ctx, stmts, next_point)
         }
     }
 }
@@ -236,12 +236,36 @@ fn parse_stmt(stmt: syn::Stmt) -> Result<ParsedStmt, syn::Error> {
             ParsedStmt::Yield(local.try_into()?)
         }
 
-        syn::Stmt::Expr(syn::Expr::Loop(loop_), _) if crate::loop_points::LoopPoint::can_from(&loop_) => {
-            ParsedStmt::Loop(loop_.try_into()?) 
+        syn::Stmt::Expr(syn::Expr::Loop(loop_), _)
+            if crate::loop_points::LoopPoint::can_from(&loop_) =>
+        {
+            ParsedStmt::Loop(loop_.try_into()?)
         }
 
         _ => ParsedStmt::Stmt(stmt),
     };
 
     Ok(stmt)
+}
+
+pub fn expand_all(
+    ctx: &mut Ctx,
+    mut current_point: PointDef,
+    mut stmts: impl Iterator<Item = Stmt>,
+) -> Result<TokenStream, syn::Error> {
+    let mut output = TokenStream::new();
+    loop {
+        let body = PointBody::parse(&mut stmts)?;
+
+        let tokens = expand(ctx, current_point, body.stmts, body.end.as_ref());
+        output.extend(tokens);
+
+        if let Some(def) = body.end {
+            current_point = def;
+        } else {
+            break;
+        }
+    }
+
+    Ok(output)
 }
