@@ -359,7 +359,6 @@ mod tests {
 
                         let i = 0;
                         let acc = Accumulator::new(balances);
-                        continue;
                     }
                 }
             }

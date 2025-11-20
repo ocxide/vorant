@@ -10,12 +10,12 @@ use crate::{
 pub struct YieldPoint {
     pub save: PointSave,
     pub _let_token: Token![let],
-    pub pat: Pat,
+    pub pat: Box<Pat>,
     pub _colon_token: Token![:],
-    pub ty: Type,
+    pub ty: Box<Type>,
     pub _eq_token: Token![=],
     pub _yield_token: Token![yield],
-    pub expr: syn::ExprCast,
+    pub expr: Box<syn::ExprCast>,
 }
 
 impl YieldPoint {
@@ -23,17 +23,17 @@ impl YieldPoint {
         YieldPoint {
             save,
             _let_token: Default::default(),
-            pat,
+            pat: Box::new(pat),
             _colon_token: Default::default(),
-            ty,
+            ty: Box::new(ty),
             _eq_token: Default::default(),
             _yield_token: Default::default(),
-            expr: syn::ExprCast {
+            expr: Box::new(syn::ExprCast {
                 attrs: vec![],
                 expr: Box::new(expr.0),
                 as_token: Default::default(),
                 ty: Box::new(expr.1),
-            },
+            }),
         }
     }
 
@@ -81,7 +81,7 @@ impl TryFrom<syn::Local> for YieldPoint {
                         expr,
                     }),
                 ..
-            } => (attrs, let_token, *pat, colon_token, *ty, eq_token, *expr),
+            } => (attrs, let_token, pat, colon_token, ty, eq_token, *expr),
             _ => return Err(syn::Error::new_spanned(stmt, "invalid syntax for yield")),
         };
 
@@ -114,7 +114,7 @@ impl TryFrom<syn::Local> for YieldPoint {
             ty,
             _eq_token: eq_token,
             _yield_token: yield_token,
-            expr: cast,
+            expr: Box::new(cast),
         })
     }
 }
