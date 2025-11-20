@@ -43,7 +43,7 @@ impl LoopPoint {
         self,
         ctx: &mut Ctx,
         _rest: Stmts,
-        _next: Option<&PointDef>,
+        _next: Option<&mut PointDef>,
     ) -> Result<TokenStream, syn::Error> {
         let ident = format_ident!("Loop{}", ctx.loop_idx);
         let machine_ident = ctx.machine_ident.clone();
@@ -53,7 +53,7 @@ impl LoopPoint {
         let mut stmts = self.block.stmts.into_iter();
         let mut body = PointBody::parse(&mut stmts)?;
 
-        let end = body.end.as_ref().map(|end| end.expand_construct(ctx));
+        let end = body.end.as_mut().map(|end| end.expand_construct(ctx));
         let body_stmts = body.stmts.expand(ctx, end.is_some());
 
         let points = if let Some(end) = body.end {

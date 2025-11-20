@@ -123,7 +123,7 @@ pub fn expand(
     ctx: &mut Ctx,
     point: &YieldPoint,
     mut stmts: Stmts,
-    next_point: Option<&PointDef>,
+    next_point: Option<&mut PointDef>,
 ) -> TokenStream {
     let machine_ident = &ctx.machine_ident;
     let ident = format_ident!("Yield{}", ctx.yield_returns.len());

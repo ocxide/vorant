@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Expr, Ident, ItemFn, Pat, Stmt, Token, Type, spanned::Spanned};
 
-use crate::{loop_points::LoopPoint, yield_points::YieldPoint};
+use crate::{if_points::IfPoint, loop_points::LoopPoint, yield_points::YieldPoint};
 
 pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::Error> {
     let machine_ident: Ident = syn::parse2(attr)?;
@@ -18,6 +18,7 @@ pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::E
         loop_idx: 0,
         loop_scope: None,
         yield_returns: vec![],
+        if_idx: 0,
     };
 
     let args: Vec<_> = item_fn
@@ -80,6 +81,7 @@ pub struct Ctx {
     pub machine_ident: Ident,
     pub yield_returns: Vec<Type>,
     pub loop_idx: usize,
+    pub if_idx: usize,
     pub loop_scope: Option<crate::loop_points::LoopScope>,
 }
 
@@ -88,11 +90,9 @@ fn top_yields(
     args: Vec<(Option<Token![mut]>, Ident, Type)>,
     incoming_stmts: Vec<Stmt>,
 ) -> Result<TokenStream, syn::Error> {
-    let mut output = TokenStream::new();
+    let incoming_stmts = incoming_stmts.into_iter();
 
-    let mut incoming_stmts = incoming_stmts.into_iter();
-
-    let mut current_point = PointDef::Yield(crate::yield_points::YieldPoint::new(
+    let current_point = PointDef::Yield(crate::yield_points::YieldPoint::new(
         crate::save::PointSave {
             items: args
                 .into_iter()
@@ -109,32 +109,21 @@ fn top_yields(
         (syn::parse_quote! { () }, syn::parse_quote! {()}),
     ));
 
-    loop {
-        let body = PointBody::parse(&mut incoming_stmts)?;
-
-        let tokens = expand(ctx, current_point, body.stmts, body.end.as_ref());
-        output.extend(tokens);
-
-        if let Some(def) = body.end {
-            current_point = def;
-        } else {
-            break;
-        }
-    }
-
-    Ok(output)
+    expand_all(ctx, current_point, incoming_stmts)
 }
 
 pub enum PointDef {
     Yield(crate::yield_points::YieldPoint),
     Loop(crate::loop_points::LoopPoint),
+    If(crate::if_points::IfPoint),
 }
 
 impl PointDef {
-    pub fn expand_construct(&self, ctx: &Ctx) -> TokenStream {
+    pub fn expand_construct(&mut self, ctx: &Ctx) -> TokenStream {
         match self {
             PointDef::Yield(point) => point.expand_construct(ctx),
             PointDef::Loop(point) => point.expand_construct(ctx),
+            PointDef::If(point) => point.expand_call(ctx),
         }
     }
 }
@@ -143,11 +132,12 @@ pub fn expand(
     ctx: &mut Ctx,
     current_point: PointDef,
     stmts: Stmts,
-    next_point: Option<&PointDef>,
+    next_point: Option<&mut PointDef>,
 ) -> Result<TokenStream, syn::Error> {
     match current_point {
         PointDef::Yield(point) => Ok(crate::yield_points::expand(ctx, &point, stmts, next_point)),
         PointDef::Loop(point) => point.expand(ctx, stmts, next_point),
+        PointDef::If(point) => point.expand(ctx, stmts, next_point),
     }
 }
 
@@ -220,6 +210,7 @@ impl Stmts {
 pub enum ParsedStmt {
     Yield(YieldPoint),
     Loop(LoopPoint),
+    If(IfPoint),
     Stmt(Stmt),
 }
 
@@ -247,6 +238,10 @@ impl PointBody {
                     expr.map(|expr| *expr).unwrap_or(syn::parse_quote! { () }),
                 )),
                 ParsedStmt::Stmt(stmt) => stmts.push(NormalStmt::Stmt(stmt)),
+                ParsedStmt::If(point) => {
+                    end = Some(PointDef::If(point));
+                    break;
+                }
                 ParsedStmt::Loop(point) => {
                     end = Some(PointDef::Loop(point));
                     break;
@@ -277,6 +272,10 @@ fn parse_stmt(stmt: syn::Stmt) -> Result<ParsedStmt, syn::Error> {
             ParsedStmt::Loop(loop_.try_into()?)
         }
 
+        syn::Stmt::Expr(syn::Expr::If(if_), _) if crate::if_points::IfPoint::can_from(&if_) => {
+            ParsedStmt::If(if_.try_into()?)
+        }
+
         _ => ParsedStmt::Stmt(stmt),
     };
 
@@ -290,9 +289,9 @@ pub fn expand_all(
 ) -> Result<TokenStream, syn::Error> {
     let mut output = TokenStream::new();
     loop {
-        let body = PointBody::parse(&mut stmts)?;
+        let mut body = PointBody::parse(&mut stmts)?;
 
-        let tokens = expand(ctx, current_point, body.stmts, body.end.as_ref());
+        let tokens = expand(ctx, current_point, body.stmts, body.end.as_mut());
         output.extend(tokens);
 
         if let Some(def) = body.end {

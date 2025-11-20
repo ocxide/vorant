@@ -15,6 +15,7 @@ mod loop_points;
 mod machine_fn;
 mod save;
 mod yield_points;
+mod if_points;
 
 #[cfg(test)]
 mod tests {
@@ -325,11 +326,10 @@ mod tests {
                 let acc = Accumulator::new(balances);
                 let mut i = 0;
 
-                while save! { acc: Accumulator, step_size: usize, i: usize } {
-                    let next: Option<(BlockId, Block)> = yield (
-                        save! { mut acc: Accumulator, step_size: usize, mut i: usize },
-                        () as (),
-                    );
+                #[machinite::save { acc: Accumulator, step_size: usize, i: usize }]
+                loop {
+                    #[machinite::save { mut acc: Accumulator, step_size: usize, mut i: usize }]
+                    let next: Option<(BlockId, Block)> = yield () as ();
 
                     let Some((id, block)) = next else {
                         return Ok(());
@@ -344,6 +344,7 @@ mod tests {
 
                     i += 1;
 
+                    #[machinite::save { step_size: usize }]
                     if i >= step_size {
                         total_blocks += i;
 
@@ -353,8 +354,8 @@ mod tests {
                             at_block_id: id,
                         };
 
-                        let balances: BalanceSet =
-                            yield (save! { step_size: usize }, snapshot as Snapshot);
+                        #[machinite::save { step_size: usize }]
+                        let balances: BalanceSet = yield snapshot as Snapshot;
 
                         let i = 0;
                         let acc = Accumulator::new(balances);
@@ -363,21 +364,21 @@ mod tests {
                 }
             }
         );
-        let attr: TokenStream = syn::parse_quote!(GetBalancesAt);
+        let attr: TokenStream = syn::parse_quote!(BlocksRebuilder);
 
         let output = super::machine_fn::machine(attr, input).unwrap();
 
         assert_eq!(
             output.to_string(),
             quote! {
-                pub enum BlocksRebuilder {
+                enum BlocksRebuilder {
                     Yield0(blocks_rebuilder::Yield0, ()),
                     Yield1(blocks_rebuilder::Yield1, ()),
-                    Yield2(blocks_rebuilder::Yield2, Snapshot),
+                    Yield2(blocks_rebuilder::Yield2, Snapshot)
                 }
 
                 mod blocks_rebuilder {
-                    impl Machine for BlocksRebuilder {
+                    impl machinite::Machine for BlocksRebuilder {
                         type Out = Result<(), BlockError>;
                     }
 
@@ -393,7 +394,7 @@ mod tests {
                             let acc = Accumulator::new(balances);
                             let mut i = 0;
 
-                            Loop0 { acc, step_size, i }.plot()
+                            return Loop0 { acc, step_size, i }.plot_start();
                         }
                     }
 
@@ -452,7 +453,7 @@ mod tests {
                                 ));
                             }
 
-                            Loop0 { acc, step_size, i }.plot()
+                            return Loop0 { acc, step_size, i }.plot();
                         }
                     }
 
