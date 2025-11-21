@@ -2,7 +2,8 @@
 name = "vorant"
 version = "0.2.0"
 edition = "2024"
-license = "GNU GPLv3"
+authors=["ocxide"]
+license = "LGPL-3.0-only"
 description = "A library for generating state machines"
 repository = "https://github.com/ocxide/vorant"
 keywords = ["machine", "vorant", "state-machine"]
@@ -11,4 +12,4 @@ keywords = ["machine", "vorant", "state-machine"]
 members = ["vorant_gen"]
 
 [dependencies]
-vorant_gen = { path = "./vorant_gen" }
+vorant_gen = { path = "./vorant_gen", version="=0.2.0" }
