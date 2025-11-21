@@ -344,7 +344,7 @@ mod tests {
 
                     i += 1;
 
-                    #[machinite::save { step_size: usize }]
+                    #[machinite::save { acc: Accumulator, step_size: usize, i: usize }]
                     if i >= step_size {
                         total_blocks += i;
 
@@ -383,7 +383,7 @@ mod tests {
 
                     pub struct Yield0 {
                         balances: BalanceSet,
-                        step_size: usize,
+                        step_size: usize
                     }
 
                     impl Yield0 {
@@ -400,24 +400,24 @@ mod tests {
                     pub struct Loop0 {
                         acc: Accumulator,
                         step_size: usize,
-                        i: usize,
+                        i: usize
                     }
 
                     impl Loop0 {
-                        pub fn plot(self) -> MachinePoll<BlocksRebuilder> {
+                        pub fn plot_start(self) -> MachinePoll<BlocksRebuilder> {
                             let Self { acc, step_size, i } = self;
 
-                            MachinePoll::Yield(BlocksRebuilder::Yield1(
+                            return MachinePoll::Yield(BlocksRebuilder::Yield1(
                                 Yield1 { acc, step_size, i },
-                                (),
-                            ))
+                                ()
+                            ));
                         }
                     }
 
                     pub struct Yield1 {
                         acc: Accumulator,
                         step_size: usize,
-                        i: usize,
+                        i: usize
                     }
 
                     impl Yield1 {
@@ -447,27 +447,41 @@ mod tests {
                                 };
 
                                 return MachinePoll::Yield(BlocksRebuilder::Yield2(
-                                    Yield2 {},
+                                    Yield2 { step_size },
                                     snapshot
                                 ));
                             }
 
-                            return Loop0 { acc, step_size, i }.plot();
+                            return If0 { acc, step_size, i }.plot_after();
                         }
                     }
 
-                    pub struct Yield2 {
+                    pub struct If0 {
+                        acc: Accumulator,
                         step_size: usize,
+                        i: usize
+                    }
+
+                    pub struct Yield2 {
+                        step_size: usize
                     }
 
                     impl Yield2 {
                         pub fn plot(self, balances: BalanceSet) -> MachinePoll<BlocksRebuilder> {
                             let Self { step_size } = self;
 
-                            let acc = Accumulator::new(balances);
                             let i = 0;
+                            let acc = Accumulator::new(balances);
 
-                            Loop0 { acc, step_size, i }.plot()
+                            return If0 { acc, step_size, i }.plot_after();
+                        }
+                    }
+
+                    impl If0 {
+                        pub fn plot_after(self) -> MachinePoll<BlocksRebuilder> {
+                            let Self { acc, step_size, i } = self;
+
+                            return Loop0 { acc, step_size, i }.plot_start();
                         }
                     }
                 }

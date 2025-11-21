@@ -3,7 +3,7 @@ use quote::{format_ident, quote};
 use syn::{Expr, Pat, PatType, Token, Type, spanned::Spanned};
 
 use crate::{
-    machine_fn::{Ctx, PointDef, Stmts},
+    machine_fn::{Ctx, PointDef, Scope, Stmts},
     save::PointSave,
 };
 
@@ -124,6 +124,7 @@ pub fn expand(
     point: &YieldPoint,
     mut stmts: Stmts,
     next_point: Option<&mut PointDef>,
+    scope: &Scope<'_>,
 ) -> TokenStream {
     let machine_ident = &ctx.machine_ident;
     let ident = format_ident!("Yield{}", ctx.yield_returns.len());
@@ -137,7 +138,7 @@ pub fn expand(
     ctx.yield_returns.push((*point.expr.ty).clone());
     let end = next_point.map(|x| x.expand_construct(ctx));
 
-    let body = stmts.expand(ctx, end.is_some());
+    let body = stmts.expand(ctx, scope, end.is_some());
 
     let out = quote::quote! {
         pub struct #ident {

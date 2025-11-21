@@ -82,7 +82,7 @@ pub struct Ctx {
     pub yield_returns: Vec<Type>,
     pub loop_idx: usize,
     pub if_idx: usize,
-    pub loop_scope: Option<crate::loop_points::LoopScope>,
+    pub loop_scope: Option<crate::loop_points::LoopNamespace>,
 }
 
 fn top_yields(
@@ -109,7 +109,7 @@ fn top_yields(
         (syn::parse_quote! { () }, syn::parse_quote! {()}),
     ));
 
-    expand_all(ctx, current_point, incoming_stmts)
+    expand_all(ctx, current_point, incoming_stmts, &Scope::Global)
 }
 
 pub enum PointDef {
@@ -133,23 +133,46 @@ pub fn expand(
     current_point: PointDef,
     stmts: Stmts,
     next_point: Option<&mut PointDef>,
+    scope: &Scope<'_>,
 ) -> Result<TokenStream, syn::Error> {
     match current_point {
-        PointDef::Yield(point) => Ok(crate::yield_points::expand(ctx, &point, stmts, next_point)),
-        PointDef::Loop(point) => point.expand(ctx, stmts, next_point),
-        PointDef::If(point) => point.expand(ctx, stmts, next_point),
+        PointDef::Yield(point) => Ok(crate::yield_points::expand(
+            ctx, &point, stmts, next_point, scope,
+        )),
+        PointDef::Loop(point) => point.expand(ctx, stmts, next_point, scope),
+        PointDef::If(point) => point.expand(ctx, stmts, next_point, scope),
+    }
+}
+
+pub enum Scope<'s> {
+    Global,
+    If(crate::if_points::IfScope<'s>),
+    Loop(crate::loop_points::LoopScope<'s>),
+}
+
+impl<'s> Scope<'s> {
+    pub fn expand_end(&self, ctx: &Ctx, expr: Option<&syn::Expr>) -> TokenStream {
+        match self {
+            Scope::If(scope) => scope.expand_end(ctx, expr),
+            Scope::Loop(scope) => scope.expand_end(ctx),
+            Scope::Global => quote! { return MachinePoll::End(#expr); },
+        }
     }
 }
 
 pub struct Stmts(Vec<NormalStmt>);
 
 impl Stmts {
-    pub fn expand(&mut self, ctx: &Ctx, has_next: bool) -> TokenStream {
+    pub fn expand(
+        &mut self,
+        ctx: &Ctx,
+        immidiate_scope: &Scope<'_>,
+        has_next: bool,
+    ) -> TokenStream {
         let Some((last, rest)) = self.0.split_last_mut() else {
-            return match (&ctx.loop_scope, has_next) {
-                (_, true) => TokenStream::new(),
-                (Some(scope), false) => scope.expand_construct(),
-                _ => quote! { return MachinePoll::End(()); },
+            return match has_next {
+                true => TokenStream::new(),
+                false => immidiate_scope.expand_end(ctx, None),
             };
         };
 
@@ -183,21 +206,20 @@ impl Stmts {
 
         let stmts = rest.iter_mut().map(handle);
 
-        let last = match (ctx.loop_scope.as_ref(), last, has_next) {
-            (_, NormalStmt::Stmt(syn::Stmt::Expr(expr, None)), false) => {
-                quote! { return MachinePoll::End(#expr); }
+        let last = match (last, has_next) {
+            (NormalStmt::Stmt(syn::Stmt::Expr(expr, None)), false) => {
+                immidiate_scope.expand_end(ctx, Some(expr))
             }
-
-            (Some(scope), stmt @ NormalStmt::Stmt(syn::Stmt::Expr(_, Some(_))), false) => {
+            (stmt, false) => {
                 let tokens = handle(stmt);
-                let scope_start = scope.expand_construct();
+                let end = immidiate_scope.expand_end(ctx, None);
 
                 quote! {
                     #tokens
-                    #scope_start
+                    #end
                 }
             }
-            (_, stmt, _) => handle(stmt),
+            (stmt, _) => handle(stmt),
         };
 
         quote! {
@@ -211,7 +233,7 @@ pub enum ParsedStmt {
     Yield(YieldPoint),
     Loop(LoopPoint),
     If(IfPoint),
-    Stmt(Stmt),
+    Stmt(Box<Stmt>),
 }
 
 pub enum NormalStmt {
@@ -231,13 +253,13 @@ impl PointBody {
 
         for stmt in incoming_stmts {
             match parse_stmt(stmt)? {
-                ParsedStmt::Stmt(syn::Stmt::Expr(
-                    syn::Expr::Return(syn::ExprReturn { expr, .. }),
-                    _,
-                )) => stmts.push(NormalStmt::Return(
-                    expr.map(|expr| *expr).unwrap_or(syn::parse_quote! { () }),
-                )),
-                ParsedStmt::Stmt(stmt) => stmts.push(NormalStmt::Stmt(stmt)),
+                ParsedStmt::Stmt(stmt) => match *stmt {
+                    syn::Stmt::Expr(syn::Expr::Return(syn::ExprReturn { expr, .. }), _) => stmts
+                        .push(NormalStmt::Return(
+                            expr.map(|expr| *expr).unwrap_or(syn::parse_quote! { () }),
+                        )),
+                    stmt => stmts.push(NormalStmt::Stmt(stmt)),
+                },
                 ParsedStmt::If(point) => {
                     end = Some(PointDef::If(point));
                     break;
@@ -276,7 +298,7 @@ fn parse_stmt(stmt: syn::Stmt) -> Result<ParsedStmt, syn::Error> {
             ParsedStmt::If(if_.try_into()?)
         }
 
-        _ => ParsedStmt::Stmt(stmt),
+        _ => ParsedStmt::Stmt(Box::new(stmt)),
     };
 
     Ok(stmt)
@@ -286,12 +308,13 @@ pub fn expand_all(
     ctx: &mut Ctx,
     mut current_point: PointDef,
     mut stmts: impl Iterator<Item = Stmt>,
+    scope: &Scope<'_>,
 ) -> Result<TokenStream, syn::Error> {
     let mut output = TokenStream::new();
     loop {
         let mut body = PointBody::parse(&mut stmts)?;
 
-        let tokens = expand(ctx, current_point, body.stmts, body.end.as_mut());
+        let tokens = expand(ctx, current_point, body.stmts, body.end.as_mut(), scope);
         output.extend(tokens);
 
         if let Some(def) = body.end {

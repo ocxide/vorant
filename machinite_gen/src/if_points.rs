@@ -3,7 +3,7 @@ use quote::{format_ident, quote};
 use syn::spanned::Spanned;
 
 use crate::{
-    machine_fn::{Ctx, PointBody, PointDef, Stmts},
+    machine_fn::{Ctx, PointBody, PointDef, Scope, Stmts},
     save::PointSave,
 };
 
@@ -48,12 +48,19 @@ impl TryFrom<syn::ExprIf> for IfPoint {
 impl IfPoint {
     pub fn expand_call(&mut self, ctx: &Ctx) -> TokenStream {
         let Self {
-            first_point, cond, ..
+            first_point,
+            save,
+            cond,
+            ..
         } = self;
 
         let ident = format_ident!("If{}", ctx.if_idx);
+        let first_stmts =
+            first_point
+                .stmts
+                .expand(ctx, &Scope::If(IfScope { save }), first_point.end.is_some());
+
         let constructor = self.save.expand_constructor();
-        let first_stmts = first_point.stmts.expand(ctx, first_point.end.is_some());
         let first_point = first_point.end.as_mut().map(|x| x.expand_construct(ctx));
 
         quote! {
@@ -71,6 +78,7 @@ impl IfPoint {
         ctx: &mut Ctx,
         mut after: Stmts,
         next: Option<&mut PointDef>,
+        scope: &Scope<'_>,
     ) -> Result<TokenStream, syn::Error> {
         let Self {
             save,
@@ -90,20 +98,21 @@ impl IfPoint {
                 ctx,
                 first_point,
                 next_points,
+                &Scope::If(IfScope { save: &save }),
             )?)
         } else {
             None
         };
 
         let outer_next = next.map(|x| x.expand_construct(ctx));
-        let after = after.expand(ctx, outer_next.is_some());
+        let after = after.expand(ctx, scope, outer_next.is_some());
 
         let out = quote! {
-            #inner_points
-
             pub struct #ident {
                 #def
             }
+
+            #inner_points
 
             impl #ident {
                 pub fn plot_after(self) -> MachinePoll<#machine_ident> {
@@ -117,5 +126,20 @@ impl IfPoint {
 
         ctx.if_idx += 1;
         Ok(out)
+    }
+}
+
+pub struct IfScope<'s> {
+    save: &'s PointSave,
+}
+
+impl<'s> IfScope<'s> {
+    pub fn expand_end(&self, ctx: &Ctx, _expr: Option<&syn::Expr>) -> TokenStream {
+        let ident = format_ident!("If{}", ctx.if_idx);
+        let constructor = self.save.expand_constructor();
+
+        quote! {
+            return #ident { #constructor }.plot_after();
+        }
     }
 }

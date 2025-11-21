@@ -3,7 +3,7 @@ use quote::{format_ident, quote};
 use syn::{Block, spanned::Spanned};
 
 use crate::{
-    machine_fn::{Ctx, PointBody, PointDef, Stmts},
+    machine_fn::{Ctx, PointBody, PointDef, Scope, Stmts},
     save::PointSave,
 };
 
@@ -44,6 +44,7 @@ impl LoopPoint {
         ctx: &mut Ctx,
         _rest: Stmts,
         _next: Option<&mut PointDef>,
+        scope: &Scope<'_>,
     ) -> Result<TokenStream, syn::Error> {
         let ident = format_ident!("Loop{}", ctx.loop_idx);
         let machine_ident = ctx.machine_ident.clone();
@@ -54,16 +55,21 @@ impl LoopPoint {
         let mut body = PointBody::parse(&mut stmts)?;
 
         let end = body.end.as_mut().map(|end| end.expand_construct(ctx));
-        let body_stmts = body.stmts.expand(ctx, end.is_some());
+        let body_stmts = body.stmts.expand(ctx, scope, end.is_some());
 
         let points = if let Some(end) = body.end {
             let prev = ctx.loop_scope.take();
-            ctx.loop_scope = Some(LoopScope {
-                ident: ident.clone(),
-                fields: self.save.items.iter().map(|x| &x.ident).cloned().collect(),
+            ctx.loop_scope = Some(LoopNamespace {
+                _ident: ident.clone(),
+                _fields: self.save.items.iter().map(|x| &x.ident).cloned().collect(),
             });
 
-            let tokens = crate::machine_fn::expand_all(ctx, end, stmts)?;
+            let tokens = crate::machine_fn::expand_all(
+                ctx,
+                end,
+                stmts,
+                &Scope::Loop(LoopScope { save: &self.save }),
+            )?;
 
             ctx.loop_scope = prev;
 
@@ -103,16 +109,32 @@ impl LoopPoint {
     }
 }
 
-pub struct LoopScope {
-    ident: syn::Ident,
-    fields: Vec<syn::Ident>,
+// TODO: support continue and break
+pub struct LoopNamespace {
+    _ident: syn::Ident,
+    _fields: Vec<syn::Ident>,
 }
 
-impl LoopScope {
-    pub fn expand_construct(&self) -> TokenStream {
-        let ident = &self.ident;
-        let fields = &self.fields;
+impl LoopNamespace {
+    // pub fn expand_construct(&self) -> TokenStream {
+    //     let ident = &self._ident;
+    //     let fields = &self._fields;
+    //
+    //     quote! { return #ident { #(#fields),* }.plot_start(); }
+    // }
+}
 
-        quote! { return #ident { #(#fields),* }.plot_start(); }
+pub struct LoopScope<'s> {
+    save: &'s PointSave,
+}
+
+impl<'s> LoopScope<'s> {
+    pub fn expand_end(&self, ctx: &Ctx) -> TokenStream {
+        let ident = format_ident!("Loop{}", ctx.loop_idx);
+        let constructor = self.save.expand_constructor();
+
+        quote! {
+            return #ident { #constructor }.plot_start();
+        }
     }
 }
