@@ -115,7 +115,7 @@ impl IfPoint {
             #inner_points
 
             impl #ident {
-                pub fn plot_after(self) -> MachinePoll<#machine_ident> {
+                pub fn plot_after(self) -> ::vorant::Step<#machine_ident> {
                     let Self { #destructor } = self;
 
                     #after

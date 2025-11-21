@@ -88,7 +88,7 @@ impl LoopPoint {
             }
 
             impl #ident {
-                pub fn plot_start(self) -> MachinePoll<#machine_ident> {
+                pub fn plot_start(self) -> ::vorant::Step<#machine_ident> {
                     let Self { #destruct_fields } = self;
 
                     #body_stmts

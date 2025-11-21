@@ -1,9 +1,10 @@
 [package]
-name = "machinite"
+name = "vorant"
 version = "0.1.0"
 edition = "2024"
 
 [workspace]
-members = ["machinite_gen"]
+members = ["vorant_gen"]
 
 [dependencies]
+vorant_gen = { path = "./vorant_gen" }

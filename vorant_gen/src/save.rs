@@ -123,7 +123,7 @@ impl TryFrom<(Span, Vec<syn::Attribute>)> for PointSave {
         let Some(tokens) = tokens else {
             return Err(syn::Error::new(
                 span,
-                "expected `machinite::save { .. }` attribute",
+                "expected `vorant::save { .. }` attribute",
             ));
         };
 
@@ -136,7 +136,7 @@ impl TryFrom<(Span, Vec<syn::Attribute>)> for PointSave {
 fn is_save_path(path: &syn::Path) -> bool {
     path.leading_colon.is_none()
         && path.segments.len() == 2
-        && path.segments[0].ident == "machinite"
+        && path.segments[0].ident == "vorant"
         && path.segments[1].ident == "save"
 }
 
@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn checks_save_path() {
-        let path: syn::Path = parse_quote!(machinite::save);
-        assert!(is_save_path(&path), "expected `machine::save`");
+        let path: syn::Path = parse_quote!(vorant::save);
+        assert!(is_save_path(&path), "expected `vorant::save`");
     }
 }

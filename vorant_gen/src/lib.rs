@@ -29,7 +29,7 @@ mod tests {
             fn get_balance_at(
                 now: Timestamp,
             ) -> Result<(BalanceSet, Option<SnapshotMeta>), BlockError> {
-                #[machinite::save { now: Timestamp }]
+                #[vorant::save { now: Timestamp }]
                 let last: Option<(BalanceSet, SnapshotMeta, BlockMeta)> = yield now as Timestamp;
 
                 let (balances, snapshot, range) = match last {
@@ -41,7 +41,7 @@ mod tests {
                     None => (BalanceSet::default(), None, GetBlocks::Until(..=now)),
                 };
 
-                #[machinite::save { snapshot: Option<SnapshotMeta> }]
+                #[vorant::save { snapshot: Option<SnapshotMeta> }]
                 let result: <Accumulator as Machine>::Out =
                     yield (Accumulator { balances }, range) as (Accumulator, GetBlocks);
 
@@ -67,7 +67,9 @@ mod tests {
                 }
 
                 mod get_balance_at {
-                    impl machinite::Machine for GetBalancesAt {
+                    use super::*;
+
+                    impl ::vorant::Machine for GetBalancesAt {
                         type Out = Result<(BalanceSet, Option<SnapshotMeta>), BlockError>;
                     }
 
@@ -76,9 +78,9 @@ mod tests {
                     }
 
                     impl Yield0 {
-                        pub fn plot(self, _: ()) -> MachinePoll<GetBalancesAt> {
+                        pub fn plot(self, _: ()) -> ::vorant::Step<GetBalancesAt> {
                             let Self { now } = self;
-                            return MachinePoll::Yield(GetBalancesAt::Yield1(Yield1 { now }, now));
+                            return ::vorant::Step::Yield(GetBalancesAt::Yield1(Yield1 { now }, now));
                         }
                     }
 
@@ -90,7 +92,7 @@ mod tests {
                         pub fn plot(
                             self,
                             last: Option<(BalanceSet, SnapshotMeta, BlockMeta)>
-                        ) -> MachinePoll<GetBalancesAt> {
+                        ) -> ::vorant::Step<GetBalancesAt> {
                             let Self { now } = self;
 
                             let (balances, snapshot, range) = match last {
@@ -102,7 +104,7 @@ mod tests {
                                 None => (BalanceSet::default(), None, GetBlocks::Until(..=now)),
                             };
 
-                            return MachinePoll::Yield(GetBalancesAt::Yield2(
+                            return ::vorant::Step::Yield(GetBalancesAt::Yield2(
                                 Yield2 { snapshot },
                                 (Accumulator { balances }, range)
                             ));
@@ -114,7 +116,7 @@ mod tests {
                     }
 
                     impl Yield2 {
-                        pub fn plot(self, result: <Accumulator as Machine>::Out) -> MachinePoll<GetBalancesAt> {
+                        pub fn plot(self, result: <Accumulator as Machine>::Out) -> ::vorant::Step<GetBalancesAt> {
                             let Self { snapshot } = self;
 
                             let result = match result {
@@ -122,7 +124,7 @@ mod tests {
                                 Ok(balances) => Ok((balances, snapshot)),
                             };
 
-                            return MachinePoll::End(result);
+                            return ::vorant::Step::End(result);
                         }
                     }
                 }
@@ -134,9 +136,9 @@ mod tests {
     fn accumulator() {
         let input: ItemFn = parse_quote!(
             fn accumulator(balances: BalanceSet) -> Result<BalanceSet, BlockError> {
-                #[machinite::save { balances: BalanceSet }]
+                #[vorant::save { balances: BalanceSet }]
                 loop {
-                    #[machinite::save { mut balances: BalanceSet }]
+                    #[vorant::save { mut balances: BalanceSet }]
                     let next: Option<Block> = yield () as ();
 
                     let Some(block) = next else {
@@ -163,7 +165,9 @@ mod tests {
                 }
 
                 mod accumulator {
-                    impl machinite::Machine for Accumulator {
+                    use super::*;
+
+                    impl ::vorant::Machine for Accumulator {
                         type Out = Result<BalanceSet, BlockError>;
                     }
 
@@ -172,7 +176,7 @@ mod tests {
                     }
 
                     impl Yield0 {
-                        pub fn plot(self, _: ()) -> MachinePoll<Accumulator> {
+                        pub fn plot(self, _: ()) -> ::vorant::Step<Accumulator> {
                             let Self { balances } = self;
                             return Loop0 { balances }.plot_start();
                         }
@@ -183,9 +187,9 @@ mod tests {
                     }
 
                     impl Loop0 {
-                        pub fn plot_start(self) -> MachinePoll<Accumulator> {
+                        pub fn plot_start(self) -> ::vorant::Step<Accumulator> {
                             let Self { balances } = self;
-                            return MachinePoll::Yield(Accumulator::Yield1(Yield1 { balances }, ()));
+                            return ::vorant::Step::Yield(Accumulator::Yield1(Yield1 { balances }, ()));
                         }
                     }
 
@@ -194,16 +198,16 @@ mod tests {
                     }
 
                     impl Yield1 {
-                        pub fn plot(self, next: Option<Block>) -> MachinePoll<Accumulator> {
+                        pub fn plot(self, next: Option<Block>) -> ::vorant::Step<Accumulator> {
                             let Self { mut balances } = self;
 
                             let Some(block) = next else {
-                                return MachinePoll::End(Ok(balances));
+                                return ::vorant::Step::End(Ok(balances));
                             };
 
                             balances = match balances.apply_many(block.operations.into_iter()) {
                                 Ok(balances) => balances,
-                                Err(e) => return MachinePoll::End(Err(e)),
+                                Err(e) => return ::vorant::Step::End(Err(e)),
                             };
 
                             return Loop0 { balances }.plot_start();
@@ -223,7 +227,7 @@ mod tests {
                 now: Timestamp,
                 step_size: usize,
             ) -> Result<(), BlockError> {
-                #[machinite::save { block: Block, now: Timestamp, step_size: usize }]
+                #[vorant::save { block: Block, now: Timestamp, step_size: usize }]
                 let out: <GetBalancesAt as Machine>::Out =
                     yield GetBalancesAt::new(now) as GetBalancesAt;
 
@@ -237,7 +241,7 @@ mod tests {
                     Err(e) => return Err(e),
                 };
 
-                #[machinite::save {}]
+                #[vorant::save {}]
                 let result: Result<BalanceSet, BlockError> = yield (
                     BlocksRebuilder::new(balances, step_size, blocks_count.unwrap_or(0)),
                     now..,
@@ -266,7 +270,9 @@ mod tests {
                 }
 
                 mod insert_block_at {
-                    impl machinite::Machine for InsertBlockAt {
+                    use super::*;
+
+                    impl ::vorant::Machine for InsertBlockAt {
                         type Out = Result<(), BlockError>;
                     }
 
@@ -277,9 +283,9 @@ mod tests {
                     }
 
                     impl Yield0 {
-                        pub fn plot(self, _: ()) -> MachinePoll<InsertBlockAt> {
+                        pub fn plot(self, _: ()) -> ::vorant::Step<InsertBlockAt> {
                             let Self { block, now, step_size } = self;
-                            return MachinePoll::Yield(InsertBlockAt::Yield1(Yield1 { block, now, step_size }, GetBalancesAt::new(now)));
+                            return ::vorant::Step::Yield(InsertBlockAt::Yield1(Yield1 { block, now, step_size }, GetBalancesAt::new(now)));
                         }
                     }
 
@@ -290,28 +296,28 @@ mod tests {
                     }
 
                     impl Yield1 {
-                        pub fn plot(self, out: <GetBalancesAt as Machine>::Out) -> MachinePoll<InsertBlockAt> {
+                        pub fn plot(self, out: <GetBalancesAt as Machine>::Out) -> ::vorant::Step<InsertBlockAt> {
                             let Self { block, now, step_size } = self;
                             let (balances, blocks_count) = match out {
                                 Ok((balances, blocks_count)) => (balances, blocks_count),
-                                Err(e) => return MachinePoll::End(Err(e)),
+                                Err(e) => return ::vorant::Step::End(Err(e)),
                             };
                             let balances = match balances.apply_many(block.into_iter()) {
                                 Ok(balances) => balances,
-                                Err(e) => return MachinePoll::End(Err(e)),
+                                Err(e) => return ::vorant::Step::End(Err(e)),
                             };
 
-                            return MachinePoll::Yield(InsertBlockAt::Yield2(Yield2 {}, (BlocksRebuilder::new(balances, step_size, blocks_count.unwrap_or(0)), now..,)));
+                            return ::vorant::Step::Yield(InsertBlockAt::Yield2(Yield2 {}, (BlocksRebuilder::new(balances, step_size, blocks_count.unwrap_or(0)), now..,)));
                         }
                     }
 
                     pub struct Yield2 {}
                     impl Yield2 {
-                        pub fn plot(self, result: Result<BalanceSet, BlockError>) -> MachinePoll<InsertBlockAt> {
+                        pub fn plot(self, result: Result<BalanceSet, BlockError>) -> ::vorant::Step<InsertBlockAt> {
                             let Self {} = self;
                             let _ = result?;
 
-                            return MachinePoll::End(Ok(()));
+                            return ::vorant::Step::End(Ok(()));
                         }
                     }
                 }
@@ -326,9 +332,9 @@ mod tests {
                 let acc = Accumulator::new(balances);
                 let mut i = 0;
 
-                #[machinite::save { acc: Accumulator, step_size: usize, i: usize }]
+                #[vorant::save { acc: Accumulator, step_size: usize, i: usize }]
                 loop {
-                    #[machinite::save { mut acc: Accumulator, step_size: usize, mut i: usize }]
+                    #[vorant::save { mut acc: Accumulator, step_size: usize, mut i: usize }]
                     let next: Option<(BlockId, Block)> = yield () as ();
 
                     let Some((id, block)) = next else {
@@ -338,13 +344,13 @@ mod tests {
                     let Accumulator::Yield0(acc) = acc;
 
                     acc = match acc.plot(Some(block)) {
-                        MachinePoll::End(out) => return out.map(|_| ()),
-                        MachinePoll::Yield(acc) => acc,
+                        ::vorant::Step::End(out) => return out.map(|_| ()),
+                        ::vorant::Step::Yield(acc) => acc,
                     };
 
                     i += 1;
 
-                    #[machinite::save { acc: Accumulator, step_size: usize, i: usize }]
+                    #[vorant::save { acc: Accumulator, step_size: usize, i: usize }]
                     if i >= step_size {
                         total_blocks += i;
 
@@ -354,7 +360,7 @@ mod tests {
                             at_block_id: id,
                         };
 
-                        #[machinite::save { step_size: usize }]
+                        #[vorant::save { step_size: usize }]
                         let balances: BalanceSet = yield snapshot as Snapshot;
 
                         let i = 0;
@@ -377,7 +383,9 @@ mod tests {
                 }
 
                 mod blocks_rebuilder {
-                    impl machinite::Machine for BlocksRebuilder {
+                    use super::*;
+
+                    impl ::vorant::Machine for BlocksRebuilder {
                         type Out = Result<(), BlockError>;
                     }
 
@@ -387,7 +395,7 @@ mod tests {
                     }
 
                     impl Yield0 {
-                        pub fn plot(self, _: ()) -> MachinePoll<BlocksRebuilder> {
+                        pub fn plot(self, _: ()) -> ::vorant::Step<BlocksRebuilder> {
                             let Self { balances, step_size } = self;
 
                             let acc = Accumulator::new(balances);
@@ -404,10 +412,10 @@ mod tests {
                     }
 
                     impl Loop0 {
-                        pub fn plot_start(self) -> MachinePoll<BlocksRebuilder> {
+                        pub fn plot_start(self) -> ::vorant::Step<BlocksRebuilder> {
                             let Self { acc, step_size, i } = self;
 
-                            return MachinePoll::Yield(BlocksRebuilder::Yield1(
+                            return ::vorant::Step::Yield(BlocksRebuilder::Yield1(
                                 Yield1 { acc, step_size, i },
                                 ()
                             ));
@@ -421,18 +429,18 @@ mod tests {
                     }
 
                     impl Yield1 {
-                        pub fn plot(self, next: Option<(BlockId, Block)>) -> MachinePoll<BlocksRebuilder> {
+                        pub fn plot(self, next: Option<(BlockId, Block)>) -> ::vorant::Step<BlocksRebuilder> {
                             let Self { mut acc, step_size, mut i } = self;
 
                             let Some((id, block)) = next else {
-                                return MachinePoll::End(Ok(()));
+                                return ::vorant::Step::End(Ok(()));
                             };
 
                             let Accumulator::Yield0(acc) = acc;
 
                             acc = match acc.plot(Some(block)) {
-                                MachinePoll::End(out) => return MachinePoll::End(out.map(|_| ())),
-                                MachinePoll::Yield(acc) => acc,
+                                ::vorant::Step::End(out) => return ::vorant::Step::End(out.map(|_| ())),
+                                ::vorant::Step::Yield(acc) => acc,
                             };
 
                             i += 1;
@@ -446,7 +454,7 @@ mod tests {
                                     at_block_id: id,
                                 };
 
-                                return MachinePoll::Yield(BlocksRebuilder::Yield2(
+                                return ::vorant::Step::Yield(BlocksRebuilder::Yield2(
                                     Yield2 { step_size },
                                     snapshot
                                 ));
@@ -467,7 +475,7 @@ mod tests {
                     }
 
                     impl Yield2 {
-                        pub fn plot(self, balances: BalanceSet) -> MachinePoll<BlocksRebuilder> {
+                        pub fn plot(self, balances: BalanceSet) -> ::vorant::Step<BlocksRebuilder> {
                             let Self { step_size } = self;
 
                             let i = 0;
@@ -478,7 +486,7 @@ mod tests {
                     }
 
                     impl If0 {
-                        pub fn plot_after(self) -> MachinePoll<BlocksRebuilder> {
+                        pub fn plot_after(self) -> ::vorant::Step<BlocksRebuilder> {
                             let Self { acc, step_size, i } = self;
 
                             return Loop0 { acc, step_size, i }.plot_start();

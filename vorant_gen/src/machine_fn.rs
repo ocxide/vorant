@@ -68,7 +68,9 @@ pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::E
         }
 
         #vis mod #fn_ident {
-            impl machinite::Machine for #machine_ident {
+            use super::*;
+
+            impl ::vorant::Machine for #machine_ident {
                 type Out = #return_ty;
             }
 
@@ -155,7 +157,7 @@ impl<'s> Scope<'s> {
         match self {
             Scope::If(scope) => scope.expand_end(ctx, expr),
             Scope::Loop(scope) => scope.expand_end(ctx),
-            Scope::Global => quote! { return MachinePoll::End(#expr); },
+            Scope::Global => quote! { return ::vorant::Step::End(#expr); },
         }
     }
 }
@@ -186,10 +188,10 @@ impl Stmts {
                         .take()
                         .map(|x| {
                             syn::parse_quote!(
-                                MachinePoll::End(#x)
+                                ::vorant::Step::End(#x)
                             )
                         })
-                        .unwrap_or_else(|| syn::parse_quote!(MachinePoll::End(())));
+                        .unwrap_or_else(|| syn::parse_quote!(::vorant::Step::End(())));
 
                     i.expr = Some(expr);
                 }
@@ -200,7 +202,7 @@ impl Stmts {
                     syn::visit_mut::visit_stmt_mut(&mut ReturnVisitor, stmt);
                     quote! { #stmt }
                 }
-                NormalStmt::Return(expr) => quote! { return MachinePoll::End(#expr); },
+                NormalStmt::Return(expr) => quote! { return ::vorant::Step::End(#expr); },
             }
         }
 

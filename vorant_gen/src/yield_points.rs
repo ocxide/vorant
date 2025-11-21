@@ -53,7 +53,7 @@ impl YieldPoint {
         let construct_expr = self.save.expand_constructor();
 
         quote! {
-            return MachinePoll::Yield(#machine_ident::#ident(#ident { #construct_expr }, #yield_expr));
+            return ::vorant::Step::Yield(#machine_ident::#ident(#ident { #construct_expr }, #yield_expr));
         }
     }
 }
@@ -146,7 +146,7 @@ pub fn expand(
         }
 
         impl #ident {
-            pub fn plot(self, #resume_pat: #resume_ty) -> MachinePoll<#machine_ident> {
+            pub fn plot(self, #resume_pat: #resume_ty) -> ::vorant::Step<#machine_ident> {
                 let Self { #destruct_fields } = self;
 
                 #body

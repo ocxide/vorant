@@ -1,5 +1,5 @@
 [package]
-name = "machinite_gen"
+name = "vorant_gen"
 version = "0.1.0"
 edition = "2024"
 
