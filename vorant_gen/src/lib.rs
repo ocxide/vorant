@@ -26,51 +26,48 @@ mod tests {
     #[test]
     fn get_balances_at() {
         let input: ItemFn = parse_quote!(
-            fn get_balance_at(
+            fn get_latest_at(
                 now: Timestamp,
-            ) -> Result<(BalanceSet, Option<SnapshotMeta>), BlockError> {
+            ) -> Result<(Picture, Timestamp), Error> {
                 #[vorant::save { now: Timestamp }]
-                let last: Option<(BalanceSet, SnapshotMeta, BlockMeta)> = yield now as Timestamp;
+                let last: Option<(Picture, Timestamp, bool)> = yield now as Timestamp;
 
-                let (balances, snapshot, range) = match last {
-                    Some((balances, snapshot, block_meta)) => (
-                        balances,
-                        Some(snapshot),
-                        GetBlocks::Between(block_meta.at..=now),
-                    ),
-                    None => (BalanceSet::default(), None, GetBlocks::Until(..=now)),
+                let (picture, range) = match last {
+                    Some((picture, created_at, true)) => (picture, GetRange::Since(created_at..)),
+                    Some((picture, created_at, false)) => (picture, GetRange::Between(created_at..=now)),
+                    None => (Default::default, GetRange::Until(..=now)),
                 };
 
-                #[vorant::save { snapshot: Option<SnapshotMeta> }]
+                #[vorant::save { now: Timestamp }]
                 let result: <Accumulator as Machine>::Out =
-                    yield (Accumulator { balances }, range) as (Accumulator, GetBlocks);
+                    yield (Accumulator { picture }, range) as (Accumulator, GetRange);
 
                 let result = match result {
                     Err(e) => Err(e),
-                    Ok(balances) => Ok((balances, snapshot)),
+                    Ok(picture) => Ok((picture, now)),
                 };
 
                 result
             }
         );
-        let attr: TokenStream = syn::parse_quote!(GetBalancesAt);
+        let attr: TokenStream = syn::parse_quote!(GetLatestAt);
 
         let output = super::machine_fn::machine(attr, input).unwrap();
 
         assert_eq!(
             output.to_string(),
             quote! {
-                enum GetBalancesAt {
-                    Yield0(get_balance_at::Yield0, ()),
-                    Yield1(get_balance_at::Yield1, Timestamp),
-                    Yield2(get_balance_at::Yield2, (Accumulator, GetBlocks))
+                enum GetLatestAt {
+                    Yield0(get_latest_at::Yield0, ()),
+                    Yield1(get_latest_at::Yield1, Timestamp),
+                    Yield2(get_latest_at::Yield2, (Accumulator, GetRange))
                 }
 
-                mod get_balance_at {
+                mod get_latest_at {
                     use super::*;
 
-                    impl ::vorant::Machine for GetBalancesAt {
-                        type Out = Result<(BalanceSet, Option<SnapshotMeta>), BlockError>;
+                    impl ::vorant::Machine for GetLatestAt {
+                        type Out = Result<(Picture, Timestamp), Error>;
                     }
 
                     pub struct Yield0 {
@@ -78,9 +75,9 @@ mod tests {
                     }
 
                     impl Yield0 {
-                        pub fn plot(self, _: ()) -> ::vorant::Step<GetBalancesAt> {
+                        pub fn plot(self, _: ()) -> ::vorant::Step<GetLatestAt> {
                             let Self { now } = self;
-                            return ::vorant::Step::Yield(GetBalancesAt::Yield1(Yield1 { now }, now));
+                            return ::vorant::Step::Yield(GetLatestAt::Yield1(Yield1 { now }, now));
                         }
                     }
 
@@ -91,37 +88,34 @@ mod tests {
                     impl Yield1 {
                         pub fn plot(
                             self,
-                            last: Option<(BalanceSet, SnapshotMeta, BlockMeta)>
-                        ) -> ::vorant::Step<GetBalancesAt> {
+                            last: Option<(Picture, Timestamp, bool)>
+                        ) -> ::vorant::Step<GetLatestAt> {
                             let Self { now } = self;
 
-                            let (balances, snapshot, range) = match last {
-                                Some((balances, snapshot, block_meta)) => (
-                                    balances,
-                                    Some(snapshot),
-                                    GetBlocks::Between(block_meta.at..=now),
-                                ),
-                                None => (BalanceSet::default(), None, GetBlocks::Until(..=now)),
+                            let (picture, range) = match last {
+                                Some((picture, created_at, true)) => (picture, GetRange::Since(created_at..)),
+                                Some((picture, created_at, false)) => (picture, GetRange::Between(created_at..=now)),
+                                None => (Default::default, GetRange::Until(..=now)),
                             };
 
-                            return ::vorant::Step::Yield(GetBalancesAt::Yield2(
-                                Yield2 { snapshot },
-                                (Accumulator { balances }, range)
+                            return ::vorant::Step::Yield(GetLatestAt::Yield2(
+                                Yield2 { now },
+                                (Accumulator { picture }, range)
                             ));
                         }
                     }
 
                     pub struct Yield2 {
-                        snapshot: Option<SnapshotMeta>
+                        now: Timestamp
                     }
 
                     impl Yield2 {
-                        pub fn plot(self, result: <Accumulator as Machine>::Out) -> ::vorant::Step<GetBalancesAt> {
-                            let Self { snapshot } = self;
+                        pub fn plot(self, result: <Accumulator as Machine>::Out) -> ::vorant::Step<GetLatestAt> {
+                            let Self { now } = self;
 
                             let result = match result {
                                 Err(e) => Err(e),
-                                Ok(balances) => Ok((balances, snapshot)),
+                                Ok(picture) => Ok((picture, now)),
                             };
 
                             return ::vorant::Step::End(result);
@@ -135,18 +129,18 @@ mod tests {
     #[test]
     fn accumulator() {
         let input: ItemFn = parse_quote!(
-            fn accumulator(balances: BalanceSet) -> Result<BalanceSet, BlockError> {
-                #[vorant::save { balances: BalanceSet }]
+            fn accumulator(picture: Picture) -> Result<Picture, Error> {
+                #[vorant::save { picture: Picture }]
                 loop {
-                    #[vorant::save { mut balances: BalanceSet }]
+                    #[vorant::save { mut picture: Picture }]
                     let next: Option<Block> = yield () as ();
 
                     let Some(block) = next else {
-                        return Ok(balances);
+                        return Ok(picture);
                     };
 
-                    balances = match balances.apply_many(block.operations.into_iter()) {
-                        Ok(balances) => balances,
+                    picture = match picture.apply_many(block.operations.into_iter()) {
+                        Ok(picture) => picture,
                         Err(e) => return Err(e),
                     };
                 }
@@ -168,49 +162,49 @@ mod tests {
                     use super::*;
 
                     impl ::vorant::Machine for Accumulator {
-                        type Out = Result<BalanceSet, BlockError>;
+                        type Out = Result<Picture, Error>;
                     }
 
                     pub struct Yield0 {
-                        balances: BalanceSet
+                        picture: Picture
                     }
 
                     impl Yield0 {
                         pub fn plot(self, _: ()) -> ::vorant::Step<Accumulator> {
-                            let Self { balances } = self;
-                            return Loop0 { balances }.plot_start();
+                            let Self { picture } = self;
+                            return Loop0 { picture }.plot_start();
                         }
                     }
 
                     pub struct Loop0 {
-                        balances: BalanceSet
+                        picture: Picture
                     }
 
                     impl Loop0 {
                         pub fn plot_start(self) -> ::vorant::Step<Accumulator> {
-                            let Self { balances } = self;
-                            return ::vorant::Step::Yield(Accumulator::Yield1(Yield1 { balances }, ()));
+                            let Self { picture } = self;
+                            return ::vorant::Step::Yield(Accumulator::Yield1(Yield1 { picture }, ()));
                         }
                     }
 
                     pub struct Yield1 {
-                        balances: BalanceSet
+                        picture: Picture
                     }
 
                     impl Yield1 {
                         pub fn plot(self, next: Option<Block>) -> ::vorant::Step<Accumulator> {
-                            let Self { mut balances } = self;
+                            let Self { mut picture } = self;
 
                             let Some(block) = next else {
-                                return ::vorant::Step::End(Ok(balances));
+                                return ::vorant::Step::End(Ok(picture));
                             };
 
-                            balances = match balances.apply_many(block.operations.into_iter()) {
-                                Ok(balances) => balances,
+                            picture = match picture.apply_many(block.operations.into_iter()) {
+                                Ok(picture) => picture,
                                 Err(e) => return ::vorant::Step::End(Err(e)),
                             };
 
-                            return Loop0 { balances }.plot_start();
+                            return Loop0 { picture }.plot_start();
                         }
                     }
                 }
@@ -226,10 +220,10 @@ mod tests {
                 block: Block,
                 now: Timestamp,
                 step_size: usize,
-            ) -> Result<(), BlockError> {
+            ) -> Result<(), Error> {
                 #[vorant::save { block: Block, now: Timestamp, step_size: usize }]
-                let out: <GetBalancesAt as Machine>::Out =
-                    yield GetBalancesAt::new(now) as GetBalancesAt;
+                let out: <GetLatestAt as Machine>::Out =
+                    yield GetLatestAt::new(now) as GetLatestAt;
 
                 let (balances, blocks_count) = match out {
                     Ok((balances, blocks_count)) => (balances, blocks_count),
@@ -242,7 +236,7 @@ mod tests {
                 };
 
                 #[vorant::save {}]
-                let result: Result<BalanceSet, BlockError> = yield (
+                let result: Result<BalanceSet, Error> = yield (
                     BlocksRebuilder::new(balances, step_size, blocks_count.unwrap_or(0)),
                     now..,
                 )
@@ -262,7 +256,7 @@ mod tests {
             quote! {
                 enum InsertBlockAt {
                     Yield0(insert_block_at::Yield0, ()),
-                    Yield1(insert_block_at::Yield1, GetBalancesAt),
+                    Yield1(insert_block_at::Yield1, GetLatestAt),
                     Yield2(
                         insert_block_at::Yield2,
                         (BlocksRebuilder, RangeFrom<Timestamp>)
@@ -273,7 +267,7 @@ mod tests {
                     use super::*;
 
                     impl ::vorant::Machine for InsertBlockAt {
-                        type Out = Result<(), BlockError>;
+                        type Out = Result<(), Error>;
                     }
 
                     pub struct Yield0 {
@@ -285,7 +279,7 @@ mod tests {
                     impl Yield0 {
                         pub fn plot(self, _: ()) -> ::vorant::Step<InsertBlockAt> {
                             let Self { block, now, step_size } = self;
-                            return ::vorant::Step::Yield(InsertBlockAt::Yield1(Yield1 { block, now, step_size }, GetBalancesAt::new(now)));
+                            return ::vorant::Step::Yield(InsertBlockAt::Yield1(Yield1 { block, now, step_size }, GetLatestAt::new(now)));
                         }
                     }
 
@@ -296,7 +290,7 @@ mod tests {
                     }
 
                     impl Yield1 {
-                        pub fn plot(self, out: <GetBalancesAt as Machine>::Out) -> ::vorant::Step<InsertBlockAt> {
+                        pub fn plot(self, out: <GetLatestAt as Machine>::Out) -> ::vorant::Step<InsertBlockAt> {
                             let Self { block, now, step_size } = self;
                             let (balances, blocks_count) = match out {
                                 Ok((balances, blocks_count)) => (balances, blocks_count),
@@ -313,7 +307,7 @@ mod tests {
 
                     pub struct Yield2 {}
                     impl Yield2 {
-                        pub fn plot(self, result: Result<BalanceSet, BlockError>) -> ::vorant::Step<InsertBlockAt> {
+                        pub fn plot(self, result: Result<BalanceSet, Error>) -> ::vorant::Step<InsertBlockAt> {
                             let Self {} = self;
                             let _ = result?;
 
@@ -328,7 +322,7 @@ mod tests {
     #[test]
     fn blocks_rebuilder() {
         let input: ItemFn = parse_quote!(
-            fn blocks_rebuilder(balances: BalanceSet, step_size: usize) -> Result<(), BlockError> {
+            fn blocks_rebuilder(balances: Picture, step_size: usize) -> Result<(), Error> {
                 let acc = Accumulator::new(balances);
                 let mut i = 0;
 
@@ -361,7 +355,7 @@ mod tests {
                         };
 
                         #[vorant::save { step_size: usize }]
-                        let balances: BalanceSet = yield snapshot as Snapshot;
+                        let balances: Picture = yield snapshot as Snapshot;
 
                         let i = 0;
                         let acc = Accumulator::new(balances);
@@ -386,11 +380,11 @@ mod tests {
                     use super::*;
 
                     impl ::vorant::Machine for BlocksRebuilder {
-                        type Out = Result<(), BlockError>;
+                        type Out = Result<(), Error>;
                     }
 
                     pub struct Yield0 {
-                        balances: BalanceSet,
+                        balances: Picture,
                         step_size: usize
                     }
 
@@ -475,7 +469,7 @@ mod tests {
                     }
 
                     impl Yield2 {
-                        pub fn plot(self, balances: BalanceSet) -> ::vorant::Step<BlocksRebuilder> {
+                        pub fn plot(self, balances: Picture) -> ::vorant::Step<BlocksRebuilder> {
                             let Self { step_size } = self;
 
                             let i = 0;
