@@ -88,7 +88,7 @@ impl LoopPoint {
             }
 
             impl #ident {
-                pub fn plot_start(self) -> ::vorant::Step<#machine_ident> {
+                pub fn offer_start(self) -> ::vorant::Step<#machine_ident> {
                     let Self { #destruct_fields } = self;
 
                     #body_stmts
@@ -105,7 +105,7 @@ impl LoopPoint {
         let ident = format_ident!("Loop{}", ctx.loop_idx);
         let constructor = self.save.expand_constructor();
 
-        quote! { return #ident { #constructor }.plot_start(); }
+        quote! { return #ident { #constructor }.offer_start(); }
     }
 }
 
@@ -120,7 +120,7 @@ impl LoopNamespace {
     //     let ident = &self._ident;
     //     let fields = &self._fields;
     //
-    //     quote! { return #ident { #(#fields),* }.plot_start(); }
+    //     quote! { return #ident { #(#fields),* }.offer_start(); }
     // }
 }
 
@@ -134,7 +134,7 @@ impl<'s> LoopScope<'s> {
         let constructor = self.save.expand_constructor();
 
         quote! {
-            return #ident { #constructor }.plot_start();
+            return #ident { #constructor }.offer_start();
         }
     }
 }

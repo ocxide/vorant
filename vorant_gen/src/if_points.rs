@@ -69,7 +69,7 @@ impl IfPoint {
                 #first_point
             }
 
-            return #ident { #constructor }.plot_after();
+            return #ident { #constructor }.offer_after();
         }
     }
 
@@ -115,7 +115,7 @@ impl IfPoint {
             #inner_points
 
             impl #ident {
-                pub fn plot_after(self) -> ::vorant::Step<#machine_ident> {
+                pub fn offer_after(self) -> ::vorant::Step<#machine_ident> {
                     let Self { #destructor } = self;
 
                     #after
@@ -139,7 +139,7 @@ impl<'s> IfScope<'s> {
         let constructor = self.save.expand_constructor();
 
         quote! {
-            return #ident { #constructor }.plot_after();
+            return #ident { #constructor }.offer_after();
         }
     }
 }

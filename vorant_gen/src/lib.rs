@@ -75,7 +75,7 @@ mod tests {
                     }
 
                     impl Yield0 {
-                        pub fn plot(self, _: ()) -> ::vorant::Step<GetLatestAt> {
+                        pub fn offer(self, _: ()) -> ::vorant::Step<GetLatestAt> {
                             let Self { now } = self;
                             return ::vorant::Step::Yield(GetLatestAt::Yield1(Yield1 { now }, now));
                         }
@@ -86,7 +86,7 @@ mod tests {
                     }
 
                     impl Yield1 {
-                        pub fn plot(
+                        pub fn offer(
                             self,
                             last: Option<(Picture, Timestamp, bool)>
                         ) -> ::vorant::Step<GetLatestAt> {
@@ -110,7 +110,7 @@ mod tests {
                     }
 
                     impl Yield2 {
-                        pub fn plot(self, result: <Accumulator as Machine>::Out) -> ::vorant::Step<GetLatestAt> {
+                        pub fn offer(self, result: <Accumulator as Machine>::Out) -> ::vorant::Step<GetLatestAt> {
                             let Self { now } = self;
 
                             let result = match result {
@@ -170,9 +170,9 @@ mod tests {
                     }
 
                     impl Yield0 {
-                        pub fn plot(self, _: ()) -> ::vorant::Step<Accumulator> {
+                        pub fn offer(self, _: ()) -> ::vorant::Step<Accumulator> {
                             let Self { picture } = self;
-                            return Loop0 { picture }.plot_start();
+                            return Loop0 { picture }.offer_start();
                         }
                     }
 
@@ -181,7 +181,7 @@ mod tests {
                     }
 
                     impl Loop0 {
-                        pub fn plot_start(self) -> ::vorant::Step<Accumulator> {
+                        pub fn offer_start(self) -> ::vorant::Step<Accumulator> {
                             let Self { picture } = self;
                             return ::vorant::Step::Yield(Accumulator::Yield1(Yield1 { picture }, ()));
                         }
@@ -192,7 +192,7 @@ mod tests {
                     }
 
                     impl Yield1 {
-                        pub fn plot(self, next: Option<Block>) -> ::vorant::Step<Accumulator> {
+                        pub fn offer(self, next: Option<Block>) -> ::vorant::Step<Accumulator> {
                             let Self { mut picture } = self;
 
                             let Some(block) = next else {
@@ -204,7 +204,7 @@ mod tests {
                                 Err(e) => return ::vorant::Step::End(Err(e)),
                             };
 
-                            return Loop0 { picture }.plot_start();
+                            return Loop0 { picture }.offer_start();
                         }
                     }
                 }
@@ -277,7 +277,7 @@ mod tests {
                     }
 
                     impl Yield0 {
-                        pub fn plot(self, _: ()) -> ::vorant::Step<InsertBlockAt> {
+                        pub fn offer(self, _: ()) -> ::vorant::Step<InsertBlockAt> {
                             let Self { block, now, step_size } = self;
                             return ::vorant::Step::Yield(InsertBlockAt::Yield1(Yield1 { block, now, step_size }, GetLatestAt::new(now)));
                         }
@@ -290,7 +290,7 @@ mod tests {
                     }
 
                     impl Yield1 {
-                        pub fn plot(self, out: <GetLatestAt as Machine>::Out) -> ::vorant::Step<InsertBlockAt> {
+                        pub fn offer(self, out: <GetLatestAt as Machine>::Out) -> ::vorant::Step<InsertBlockAt> {
                             let Self { block, now, step_size } = self;
                             let (balances, blocks_count) = match out {
                                 Ok((balances, blocks_count)) => (balances, blocks_count),
@@ -307,7 +307,7 @@ mod tests {
 
                     pub struct Yield2 {}
                     impl Yield2 {
-                        pub fn plot(self, result: Result<BalanceSet, Error>) -> ::vorant::Step<InsertBlockAt> {
+                        pub fn offer(self, result: Result<BalanceSet, Error>) -> ::vorant::Step<InsertBlockAt> {
                             let Self {} = self;
                             let _ = result?;
 
@@ -337,7 +337,7 @@ mod tests {
 
                     let Accumulator::Yield0(acc) = acc;
 
-                    acc = match acc.plot(Some(block)) {
+                    acc = match acc.offer(Some(block)) {
                         ::vorant::Step::End(out) => return out.map(|_| ()),
                         ::vorant::Step::Yield(acc) => acc,
                     };
@@ -389,13 +389,13 @@ mod tests {
                     }
 
                     impl Yield0 {
-                        pub fn plot(self, _: ()) -> ::vorant::Step<BlocksRebuilder> {
+                        pub fn offer(self, _: ()) -> ::vorant::Step<BlocksRebuilder> {
                             let Self { balances, step_size } = self;
 
                             let acc = Accumulator::new(balances);
                             let mut i = 0;
 
-                            return Loop0 { acc, step_size, i }.plot_start();
+                            return Loop0 { acc, step_size, i }.offer_start();
                         }
                     }
 
@@ -406,7 +406,7 @@ mod tests {
                     }
 
                     impl Loop0 {
-                        pub fn plot_start(self) -> ::vorant::Step<BlocksRebuilder> {
+                        pub fn offer_start(self) -> ::vorant::Step<BlocksRebuilder> {
                             let Self { acc, step_size, i } = self;
 
                             return ::vorant::Step::Yield(BlocksRebuilder::Yield1(
@@ -423,7 +423,7 @@ mod tests {
                     }
 
                     impl Yield1 {
-                        pub fn plot(self, next: Option<(BlockId, Block)>) -> ::vorant::Step<BlocksRebuilder> {
+                        pub fn offer(self, next: Option<(BlockId, Block)>) -> ::vorant::Step<BlocksRebuilder> {
                             let Self { mut acc, step_size, mut i } = self;
 
                             let Some((id, block)) = next else {
@@ -432,7 +432,7 @@ mod tests {
 
                             let Accumulator::Yield0(acc) = acc;
 
-                            acc = match acc.plot(Some(block)) {
+                            acc = match acc.offer(Some(block)) {
                                 ::vorant::Step::End(out) => return ::vorant::Step::End(out.map(|_| ())),
                                 ::vorant::Step::Yield(acc) => acc,
                             };
@@ -454,7 +454,7 @@ mod tests {
                                 ));
                             }
 
-                            return If0 { acc, step_size, i }.plot_after();
+                            return If0 { acc, step_size, i }.offer_after();
                         }
                     }
 
@@ -469,21 +469,21 @@ mod tests {
                     }
 
                     impl Yield2 {
-                        pub fn plot(self, balances: Picture) -> ::vorant::Step<BlocksRebuilder> {
+                        pub fn offer(self, balances: Picture) -> ::vorant::Step<BlocksRebuilder> {
                             let Self { step_size } = self;
 
                             let i = 0;
                             let acc = Accumulator::new(balances);
 
-                            return If0 { acc, step_size, i }.plot_after();
+                            return If0 { acc, step_size, i }.offer_after();
                         }
                     }
 
                     impl If0 {
-                        pub fn plot_after(self) -> ::vorant::Step<BlocksRebuilder> {
+                        pub fn offer_after(self) -> ::vorant::Step<BlocksRebuilder> {
                             let Self { acc, step_size, i } = self;
 
-                            return Loop0 { acc, step_size, i }.plot_start();
+                            return Loop0 { acc, step_size, i }.offer_start();
                         }
                     }
                 }

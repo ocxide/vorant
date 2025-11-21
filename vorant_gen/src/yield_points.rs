@@ -146,7 +146,7 @@ pub fn expand(
         }
 
         impl #ident {
-            pub fn plot(self, #resume_pat: #resume_ty) -> ::vorant::Step<#machine_ident> {
+            pub fn offer(self, #resume_pat: #resume_ty) -> ::vorant::Step<#machine_ident> {
                 let Self { #destruct_fields } = self;
 
                 #body
