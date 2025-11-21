@@ -66,6 +66,12 @@ mod tests {
                 mod get_latest_at {
                     use super::*;
 
+                    impl GetLatestAt {
+                        pub fn new(now: Timestamp) -> Self {
+                            return GetLatestAt::Yield0(Yield0 { now }, ());
+                        }
+                    }
+
                     impl ::vorant::Machine for GetLatestAt {
                         type Out = Result<(Picture, Timestamp), Error>;
                     }
@@ -160,6 +166,12 @@ mod tests {
 
                 mod accumulator {
                     use super::*;
+
+                    impl Accumulator {
+                        pub fn new(picture: Picture) -> Self {
+                            return Accumulator::Yield0(Yield0 { picture }, ());
+                        }
+                    }
 
                     impl ::vorant::Machine for Accumulator {
                         type Out = Result<Picture, Error>;
@@ -265,6 +277,12 @@ mod tests {
 
                 mod insert_block_at {
                     use super::*;
+
+                    impl InsertBlockAt {
+                        pub fn new(block: Block, now: Timestamp, step_size: usize) -> Self {
+                            return InsertBlockAt::Yield0(Yield0 { block, now, step_size }, ());
+                        }
+                    }
 
                     impl ::vorant::Machine for InsertBlockAt {
                         type Out = Result<(), Error>;
@@ -378,6 +396,12 @@ mod tests {
 
                 mod blocks_rebuilder {
                     use super::*;
+
+                    impl BlocksRebuilder {
+                        pub fn new(balances: Picture, step_size: usize) -> Self {
+                            return BlocksRebuilder::Yield0(Yield0 { balances, step_size }, ());
+                        }
+                    }
 
                     impl ::vorant::Machine for BlocksRebuilder {
                         type Out = Result<(), Error>;

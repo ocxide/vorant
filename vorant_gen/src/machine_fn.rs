@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{Expr, Ident, ItemFn, Pat, Stmt, Token, Type, spanned::Spanned};
+use syn::{Expr, Ident, ItemFn, Pat, Stmt, Type, spanned::Spanned};
 
 use crate::{if_points::IfPoint, loop_points::LoopPoint, yield_points::YieldPoint};
 
@@ -53,7 +53,45 @@ pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::E
         })
         .collect::<Result<_, _>>()?;
 
-    let machine_innner = top_yields(&mut ctx, args, item_fn.block.stmts)?;
+    let save = crate::save::PointSave {
+        items: args
+            .into_iter()
+            .map(|(mutability, ident, ty)| crate::save::PointSaveItem {
+                mutability,
+                ident,
+                _colon_token: Default::default(),
+                ty,
+            })
+            .collect(),
+    };
+
+    let create = {
+        let machine_ident = &ctx.machine_ident;
+        let def = save.expand_def();
+        let construct = save.expand_constructor();
+
+        quote! {
+            impl #machine_ident {
+                pub fn new(#def) -> Self {
+                    return #machine_ident::Yield0(Yield0 { #construct }, ());
+                }
+            }
+        }
+    };
+
+    let machine_innner = {
+        let incoming_stmts = item_fn.block.stmts;
+        let incoming_stmts = incoming_stmts.into_iter();
+
+        let current_point = PointDef::Yield(crate::yield_points::YieldPoint::new(
+            save,
+            syn::parse_quote! { _ },
+            syn::parse_quote! { () },
+            (syn::parse_quote! { () }, syn::parse_quote! {()}),
+        ));
+
+        expand_all(&mut ctx, current_point, incoming_stmts, &Scope::Global)
+    }?;
 
     let yield_members = ctx.yield_returns.into_iter().enumerate().map(|(i, ty)| {
         let ident = format_ident!("Yield{}", i);
@@ -70,6 +108,8 @@ pub fn machine(attr: TokenStream, item_fn: ItemFn) -> Result<TokenStream, syn::E
         #vis mod #fn_ident {
             use super::*;
 
+            #create
+
             impl ::vorant::Machine for #machine_ident {
                 type Out = #return_ty;
             }
@@ -85,33 +125,6 @@ pub struct Ctx {
     pub loop_idx: usize,
     pub if_idx: usize,
     pub loop_scope: Option<crate::loop_points::LoopNamespace>,
-}
-
-fn top_yields(
-    ctx: &mut Ctx,
-    args: Vec<(Option<Token![mut]>, Ident, Type)>,
-    incoming_stmts: Vec<Stmt>,
-) -> Result<TokenStream, syn::Error> {
-    let incoming_stmts = incoming_stmts.into_iter();
-
-    let current_point = PointDef::Yield(crate::yield_points::YieldPoint::new(
-        crate::save::PointSave {
-            items: args
-                .into_iter()
-                .map(|(mutability, ident, ty)| crate::save::PointSaveItem {
-                    mutability,
-                    ident,
-                    _colon_token: Default::default(),
-                    ty,
-                })
-                .collect(),
-        },
-        syn::parse_quote! { _ },
-        syn::parse_quote! { () },
-        (syn::parse_quote! { () }, syn::parse_quote! {()}),
-    ));
-
-    expand_all(ctx, current_point, incoming_stmts, &Scope::Global)
 }
 
 pub enum PointDef {
